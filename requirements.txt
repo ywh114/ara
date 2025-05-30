@@ -1,0 +1,3 @@
+chromadb
+xdg_base_dirs
+tomli_w
