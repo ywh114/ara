@@ -1,0 +1,5 @@
+xdg_base_dirs
+tomli_w
+huggingface_hub
+aichar
+chromadb
