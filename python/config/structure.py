@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# TODO: Move imports to ` __init__.py`
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
@@ -16,8 +17,13 @@ W = TypeVar('W', bound='DefaultInstallationSettings')
 X = TypeVar('X', bound='GameSettings')
 Y = TypeVar('Y', bound='DefaultGameSettings')
 
+A = TypeVar('A')
 
 _sfx = '.toml'
+
+
+def dfac(obj: A) -> A:
+    return field(default_factory=lambda: obj)
 
 
 @dataclass
@@ -62,7 +68,7 @@ class DefaultGlobalSettings(DefaultSettings[GlobalSettings]):
     # [cache]
     cache_dir: Path = xdg.xdg_cache_home().joinpath(GlobalInfo.prefix)
     # [projects]
-    projects: list[str] = field(default_factory=list)
+    projects: list[str] = dfac([])
 
 
 GlobS, DGlobS = GlobalSettings, DefaultGlobalSettings
@@ -145,6 +151,23 @@ class GameSettings(Settings):
 
     # [database]
     database_embedding_model_name: str
+    database_embedding_model_type: str
+    database_embedding_model_kwargs: dict[str, str]
+    database_embedding_model_instruction_aware: bool
+    database_embedding_model_instruction_aware_fstring: str
+    database_embedding_model_tokenizer_kwargs: dict[str, str]
+    database_embedding_model_embedding_fn_kwargs: dict[
+        str, bool | int | float | str
+    ]
+    database_reranker_model_name: str
+    database_reranker_model_type: str
+    database_reranker_model_instruction_aware: bool
+    database_reranker_model_instruction_aware_fstring: str
+    database_reranker_model_kwargs: dict[str, str]
+    database_reranker_model_tokenizer_kwargs: dict[str, str]
+    database_reranker_model_embedding_fn_kwargs: dict[
+        str, bool | int | float | str
+    ]
 
     pass
 
@@ -155,5 +178,22 @@ class DefaultGameSettings(DefaultSettings[X], GameSettings):
 
     # [database]
     database_embedding_model_name: str = 'BAAI/bge-small-en-v1.5'
-
-    pass
+    database_embedding_model_type: str = 'sentence_transformers'
+    database_embedding_model_instruction_aware: bool = False
+    database_embedding_model_instruction_aware_fstring: str = ''
+    database_embedding_model_kwargs: dict[str, str] = dfac({})
+    database_embedding_model_tokenizer_kwargs: dict[str, str] = dfac({})
+    database_embedding_model_embedding_fn_kwargs: dict[
+        str, bool | int | float | str
+    ] = dfac({})
+    database_reranker_model_name: str = 'BAAI/bge-reranker-base'
+    database_reranker_model_type: str = 'CustomHuggingFace'
+    database_reranker_model_instruction_aware: bool = True
+    database_reranker_model_instruction_aware_fstring: str = (
+        '<Instruct>: {task}\n<Query>: {query}\n<Document>: {doc}'
+    )
+    database_reranker_model_kwargs: dict[str, str] = dfac({})
+    database_reranker_model_tokenizer_kwargs: dict[str, str] = dfac({})
+    database_reranker_model_embedding_fn_kwargs: dict[
+        str, bool | int | float | str
+    ] = dfac({})

@@ -96,26 +96,25 @@ class Config(Generic[T, U]):
         return uchild._get_base(), uchild
 
     @classmethod
-    def flatten_dict(cls, conf: dict[str, Any], prefix: str = '') -> dict:
+    def flatten_dict(cls, conf: dict[str, Any]) -> dict:
         """
-        Recursively flatten nested dictionary structure.
-        Note that we expect only depth 1 nesting for our usecase.
+        Flatten a dictionary with at most one level of nesting.
+        Inverse operation of `restore_dict` for the restrictions:
+            - Top-level keys never have underscores.
+            - Top-level keys never contain dicts.
+            - Table keys never have underscores.
 
-        :param conf: Nested configuration dictionary
-        :param prefix: Current key prefix (used recursively)
+        :param conf: Configuration dictionary with at most one nested level
+        :param prefix: Current key prefix (used for nested contexts)
         :return: Flattened single-level dictionary
         """
         flat_dict = {}
-
-        for key, value in conf.items():
-            # Append the keyname to the prefix.
-            full_key = f'{prefix}{key}'
-            if isinstance(value, dict):
-                # Note we add a trailing underscore.
-                flat_dict.update(cls.flatten_dict(value, f'{full_key}_'))
+        for k, v in conf.items():
+            if isinstance(v, dict):
+                for sk, sv in v.items():
+                    flat_dict[f'{k}_{sk}'] = sv
             else:
-                flat_dict[full_key] = value
-
+                flat_dict[k] = v
         return flat_dict
 
     @classmethod
@@ -123,8 +122,8 @@ class Config(Generic[T, U]):
         """
         Restore a nested dictionary from a flattened representation.
         Inverse operation of `flatten_dict` for the restrictions:
-            - The dictionary is nested to at most depth 1.
             - Top-level keys never have underscores.
+            - Top-level keys never contain dicts.
             - Table keys never have underscores.
 
         :param flat_conf: Flattened dictionary with keys in `section_key` format
@@ -263,6 +262,7 @@ def load_conf3(
     IConf: type[InstallationConfig],
     GConf: type[GameConfig],
     _DGS: type[DefaultGlobalSettings] = DefaultGlobalSettings,
+    export_after_load: bool = True,
 ) -> ConfigHolder:
     # TODO: Allow loading from user-defined toml s.t.
     # defaults <- config (overwritten each time) <- user config (persistant)
@@ -303,6 +303,12 @@ def load_conf3(
     game_config = GConf.load_toml(game_config_path, DGSettings)
 
     logger.debug('Successfully loaded 3 configuration files.')
-    return ConfigHolder[IConf, GConf, ISettings, GSettings](
+    confh = ConfigHolder[IConf, GConf, ISettings, GSettings](
         global_config, installation_config, game_config
     )
+
+    # Export after load.
+    if export_after_load:
+        confh.export_conf3()
+
+    return confh

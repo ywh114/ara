@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Iterable, override
 
-from chromadb import QueryResult, PersistentClient
-from chromadb.utils import embedding_functions
+from chromadb import Documents, Metadata, PersistentClient, QueryResult
+from chromadb.api.types import Document
+from chromadb.utils import embedding_functions as ef
 from config.config import ConfigHolder, GameConfig, InstallationConfig
 from config.structure import GameSettings, InstallationSettings
+from llm.reranker import (
+    CustomHuggingFace4Qwen3RerankerFunction,
+    CustomHuggingFaceRerankerFunction,
+)
 from llm.sources import downloader
 from util.logger import get_logger
 
@@ -15,6 +21,8 @@ _db_name = 'chroma.sqlite3'
 
 
 class DatabaseProvider(ABC):
+    """Abstract base class for database providers."""
+
     @abstractmethod
     def __init__(self, confh: ConfigHolder) -> None: ...
 
@@ -27,35 +35,99 @@ class DatabaseProvider(ABC):
         where: dict | None,
         where_document: dict | None,
         ids: list[str] | None,
-    ) -> QueryResult: ...
+        instruct_task: str = '',
+        rerank_task: str = '',
+        with_reranker: bool = False,
+        rerank_threshold: float = 0.0,
+    ) -> QueryResult:
+        """
+        Execute a query against the database.
 
+        :param domain_name: Collection name to query against.
+        :param query_texts: List of text queries to execute.
+        :param n_results: Number of results to return per query.
+        :param where: Metadata filter conditions.
+        :param where_document: Document content filter conditions.
+        :param ids: Specific document IDs to include in results.
+        :param instruct_task: Instruct task for instruction-aware embedding
+            models or if using a reranker.
+        :param with_reranker: Enable reranking.
+        :param rerank_threshold: Rerank if vector similarity is above a given
+            threshold.
+        :return: Query results with documents and metadata.
+        """
 
-class Database:
-    def __init__(
-        self, provider: type[DatabaseProvider], confh: ConfigHolder
-    ) -> None:
-        self.provider = provider(confh)
-
-    def query(
+    @abstractmethod
+    def add(
         self,
         domain_name: str,
-        query_texts: list[str],
-        n_results: int,
-        where: dict[str, str] | None = None,
-        where_document: dict[str, str] | None = None,
-        ids: list[str] | None = None,
-    ) -> QueryResult:
-        logger.debug(f'Query {domain_name} with batch size {len(query_texts)}')
-        return self.provider.query(
-            domain_name, query_texts, n_results, where, where_document, ids
-        )
+        documents: list[str],
+        metadatas: list[Metadata],
+        ids: list[str],
+    ) -> None:
+        """
+        Add documents to a collection.
 
-    def __repr__(self) -> str:
-        return f'{self.__class__.__name__}({self.provider.__class__.__name__})'
+        :param domain_name: Target collection name.
+        :param documents: Documents to add.
+        :param metadatas: Metadata for each document.
+        :param ids: Unique IDs for each document.
+        """
 
 
 class Chroma(DatabaseProvider):
+    """
+    ChromaDB. Install packages as needed.
+    ChromaDB database provider implementation.
+
+    Attributes:
+        ef_dict: Supported embedding function types.
+        rf_dict: Supported reranker function types.
+        client: Persistent ChromaDB client.
+        model: Active embedding model.
+        rmodel: Active reranker model.
+
+    See https://docs.trychroma.com/docs/overview/introduction.
+    """
+
+    ef_dict = {
+        'Cohere': ef.CohereEmbeddingFunction,
+        'OpenAI': ef.OpenAIEmbeddingFunction,
+        'HuggingFace': ef.HuggingFaceEmbeddingFunction,
+        'SentenceTransformer': ef.SentenceTransformerEmbeddingFunction,
+        'GooglePalm': ef.GooglePalmEmbeddingFunction,
+        'GoogleGenerativeAi': ef.GoogleGenerativeAiEmbeddingFunction,
+        'GoogleVertex': ef.GoogleVertexEmbeddingFunction,
+        'Ollama': ef.OllamaEmbeddingFunction,
+        'Instructor': ef.InstructorEmbeddingFunction,
+        'Jina': ef.JinaEmbeddingFunction,
+        'Mistral': ef.MistralEmbeddingFunction,
+        'VoyageAI': ef.VoyageAIEmbeddingFunction,
+        'ONNXMiniLM_L6_V2': ef.ONNXMiniLM_L6_V2,
+        'OpenCLIP': ef.OpenCLIPEmbeddingFunction,
+        'Roboflow': ef.RoboflowEmbeddingFunction,
+        'Text2Vec': ef.Text2VecEmbeddingFunction,
+        'AmazonBedrock': ef.AmazonBedrockEmbeddingFunction,
+        'ChromaLangchain': ef.ChromaLangchainEmbeddingFunction,
+        'Baseten': ef.BasetenEmbeddingFunction,
+        'CloudflareWorkersAI': ef.CloudflareWorkersAIEmbeddingFunction,
+        'TogetherAI': ef.TogetherAIEmbeddingFunction,
+        'Default': ef.DefaultEmbeddingFunction,
+    }
+    rf_dict = {
+        'CustomHuggingFace': CustomHuggingFaceRerankerFunction,
+        'CustomHuggingFace4Qwen3': CustomHuggingFace4Qwen3RerankerFunction,
+    }
+
+    @override
     def __init__(self, confh: ConfigHolder) -> None:
+        """
+        Initialize ChromaDB provider with configuration.
+
+        :param confh: Configuration holder instance.
+        :raises RuntimeError: For unsupported model types.
+        :raises ValueError: For invalid model initialization.
+        """
         self.confh: ConfigHolder[
             InstallationConfig, GameConfig, InstallationSettings, GameSettings
         ] = confh
@@ -63,22 +135,115 @@ class Chroma(DatabaseProvider):
         # Store some settings from `confh`.
         self.db_dir: Path = self.confh.inst.settings.database_db_dir
         self.em_dir: Path = self.confh.insts.database_embedding_models_dir
+        # Embedding model.
         self.model_name: str = self.confh.games.database_embedding_model_name
+        self.model_type: str = self.confh.games.database_embedding_model_type
+        # Reranker model.
+        self.rmodel_name: str = self.confh.games.database_reranker_model_name
+        self.rmodel_type: str = self.confh.games.database_reranker_model_type
+        # Embedding model instruct options.
+        self.instruct_aware = (
+            self.confh.games.database_embedding_model_instruction_aware
+        )
+        self.instruct_fstring = (
+            self.confh.games.database_embedding_model_instruction_aware_fstring
+        )
+        self.reranker_instruct_aware = (
+            self.confh.games.database_reranker_model_instruction_aware
+        )
+        self.reranker_fstring = (
+            self.confh.games.database_reranker_model_instruction_aware_fstring
+        )
 
-        # Download model. Always try to fix missing.
+        # Embedding and reranker model kwargs.
+        # XXX: {'attn_implementation': 'flash_attention_2'} requires the
+        # `flash-attn` package.
+        self.model_kwargs: dict[str, str] = (
+            self.confh.games.database_embedding_model_kwargs
+        )
+        self.model_tokenizer_kwargs: dict[str, str] = (
+            self.confh.games.database_embedding_model_tokenizer_kwargs
+        )
+        self.embedding_fn_kwargs: dict[str, str | int | float | bool] = (
+            self.confh.games.database_embedding_model_embedding_fn_kwargs
+        )
+        self.rmodel_kwargs: dict[str, str] = (
+            self.confh.games.database_reranker_model_kwargs
+        )
+        self.rmodel_tokenizer_kwargs: dict[str, str] = (
+            self.confh.games.database_reranker_model_tokenizer_kwargs
+        )
+        self.rembedding_fn_kwargs: dict[str, str | int | float | bool] = (
+            self.confh.games.database_reranker_model_embedding_fn_kwargs
+        )
+        # Log kwargs debug.
+        logger.debug(f'Embedding model kwargs: {self.model_kwargs}')
+        logger.debug(
+            f'Embedding model tokenizer kwargs: {self.model_tokenizer_kwargs}'
+        )
+        logger.debug(f'Embedding function kwargs: {self.embedding_fn_kwargs}')
+        logger.debug(f'Embedding model instruct-aware: {self.instruct_aware}')
+        logger.debug(f'Instruction fstring: {self.instruct_fstring}')
+        logger.debug(f'Reranker model kwargs: {self.rmodel_kwargs}')
+        logger.debug(
+            f'Reranker model tokenizer kwargs: {self.rmodel_tokenizer_kwargs}'
+        )
+        logger.debug(f'Reranker function kwargs: {self.rembedding_fn_kwargs}')
+
+        if self.model_type not in self.ef_dict:
+            raise RuntimeError(
+                f'{self.model_type} not supported: {tuple(self.ef_dict.keys())}'
+            )
+        if self.rmodel_type not in self.rf_dict:
+            raise RuntimeError(
+                f'{self.rmodel_type} not supported: {tuple(self.rf_dict.keys())}'
+            )
+
+        logger.debug(f'Embedding fuction type is {self.model_type}.')
+        logger.debug(f'Reranker fuction type is {self.rmodel_type}.')
+
+        # Download models. Always try to fix missing.
         # Use `self.em_dir` as the downloader cache dir.
         self.model_path: Path = downloader(
             repo=self.model_name,
             emb_dir=self.em_dir,
-            cache_dir=self.em_dir,
-            fix_missing=False,
+            cache_dir=self.em_dir.joinpath('.cache'),
+            fix_missing=False,  # FIXME: Change to `True` later.
         )
+        if self.rmodel_name:
+            self.rmodel_path: Path = downloader(
+                repo=self.rmodel_name,
+                emb_dir=self.em_dir,
+                cache_dir=self.em_dir.joinpath('.cache'),
+                fix_missing=False,  # FIXME: Change to `True` later.
+            )
 
         # Load the embedding model.
         logger.debug(f'Embedding fuction is {self.model_name}.')
-        self.model = embedding_functions.SentenceTransformerEmbeddingFunction(
-            self.model_path.as_posix()
-        )
+        try:
+            self.model = self.ef_dict[self.model_type](
+                self.model_path.as_posix(),
+                model_kwargs=self.model_kwargs,
+                tokenizer_kwargs=self.model_tokenizer_kwargs,
+                **self.embedding_fn_kwargs,
+            )
+        except ValueError as e:
+            raise ValueError(
+                'Only sentence_transformers comes pre-installed. '
+                f'Please follow the instructions: {e}'
+            ) from e
+        # Load the reranker model.
+        if self.rmodel_name:
+            logger.debug(f'Reranker fuction is {self.rmodel_name}.')
+            try:
+                self.rmodel = self.rf_dict[self.rmodel_type](
+                    self.rmodel_path.as_posix(),
+                    model_kwargs=self.rmodel_kwargs,
+                    tokenizer_kwargs=self.rmodel_tokenizer_kwargs,
+                    **self.rembedding_fn_kwargs,
+                )
+            except ValueError as e:
+                print(e)
         # Load the database.
         logger.debug(f'Persistent client at {self.db_dir.joinpath(_db_name)}.')
         self.client = PersistentClient(
@@ -86,6 +251,7 @@ class Chroma(DatabaseProvider):
         )
         logger.debug('Successfully loaded chromadb database.')
 
+    @override
     def query(
         self,
         domain_name: str,
@@ -94,15 +260,165 @@ class Chroma(DatabaseProvider):
         where: dict | None,
         where_document: dict | None,
         ids: list[str] | None,
+        instruct_task: str = '',
+        rerank_task: str = '',
+        with_reranker: bool = False,
+        rerank_threshold: float = 0.0,  # TODO: Implement.
     ) -> QueryResult:
-        collection = self.client.get_collection(domain_name)
-        return collection.query(
-            query_texts=query_texts,
+        """
+        Execute a query against the database.
+
+        :param domain_name: Collection name to query against.
+        :param query_texts: List of text queries to execute.
+        :param n_results: Number of results to return per query.
+        :param where: Metadata filter conditions.
+        :param where_document: Document content filter conditions.
+        :param ids: Specific document IDs to include in results.
+        :param instruct_task: Instruct task for instruction-aware embedding
+            models or if using a reranker.
+        :param with_reranker: Enable reranking.
+        :param rerank_threshold: Rerank if vector similarity is above a given
+            threshold.
+        :return: Query results with documents and metadata.
+        """
+        logger.debug(
+            f'{self}: search on {domain_name} with size {len(query_texts)}.'
+        )
+        collection = self.client.get_collection(
+            domain_name, embedding_function=self.model
+        )
+
+        query_result = collection.query(
+            query_texts=self.format_embedding_instructs(
+                task=instruct_task,
+                query_texts=query_texts,
+            ),
             n_results=n_results,
             where=where,
             where_document=where_document,
             ids=ids,
         )
+
+        if with_reranker and self.rmodel_name:
+            if (query_result_docs := query_result['documents']) is not None:
+
+                def _reshape0(r: Iterable) -> tuple:
+                    return tuple(map(tuple, zip(*r)))
+
+                def _reshape1(r: Iterable) -> tuple:
+                    return tuple(zip(*r))
+
+                logger.debug(
+                    f'{self}: reranking documents in '
+                    f'{len(query_result_docs)} batches.'
+                )
+                new_distances = [
+                    self.rmodel(reranker_instruct)
+                    for reranker_instruct in self.format_reranker_instructs(
+                        rerank_task, query_texts, query_result_docs
+                    )
+                ]
+                # Reorder based on new distances.
+                query_result['documents'], query_result['distances'] = (
+                    _reshape0(
+                        tuple(
+                            _reshape1(
+                                sorted(
+                                    zip(query_result_doc, new_distance),
+                                    reverse=with_reranker,
+                                    key=lambda s: s[1],
+                                )
+                            )
+                            for query_result_doc, new_distance in zip(
+                                query_result_docs, new_distances
+                            )
+                        )
+                    )
+                )
+
+        return query_result
+
+    def format_embedding_instructs(
+        self, task: str, query_texts: Documents
+    ) -> list[str]:
+        """
+        Format queries for instruction-aware embedding models.
+
+        :param task: Instruction task context.
+        :param query_texts: Original query texts.
+        :return: Formatted instruction-aware queries.
+        """
+        if self.instruct_aware:
+            return [
+                self.instruct_fstring.format(task=task, query=query)
+                for query in query_texts
+            ]
+        else:
+            return query_texts
+
+    def format_reranker_instructs(
+        self,
+        task: str,
+        query_texts: Documents,
+        query_result_docs: list[Documents],
+    ) -> list[list[tuple[str, str]]]:
+        """
+        Format context for reranker model evaluation.
+        Works?
+
+        Combines:
+        - Instruction task
+        - Retrieved documents as context
+        - Original queries
+
+        :param task: Reranking instruction task.
+        :param query_texts: Original query texts.
+        :param query_result_docs: Retrieved documents per query.
+        :return: Formatted reranker inputs.
+        """
+        if not task:
+            task = 'Retrieve passages relevant to the query.'
+        if self.reranker_instruct_aware:
+            task += '\nContext:\n{context}'
+
+        def reformat(
+            query_text: Document,
+            doc: Document,
+            docs: Documents,
+        ) -> tuple[str, str]:
+            if self.reranker_instruct_aware:
+                return self.reranker_fstring.format(
+                    task=task.format(context='\n'.join(docs)),
+                    query=query_text,
+                ), doc
+            else:
+                return query_text, doc
+
+        return [
+            [reformat(qt, doc, docs) for doc in docs]
+            for qt, docs in zip(query_texts, query_result_docs)
+        ]
+
+    @override
+    def add(
+        self,
+        domain_name: str,
+        documents: list[str],
+        metadatas: list[Metadata],
+        ids: list[str],
+    ) -> None:
+        """
+        Add documents to a collection.
+
+        :param domain_name: Target collection name.
+        :param documents: Documents to add.
+        :param metadatas: Metadata for each document.
+        :param ids: Unique IDs for each document.
+        """
+        collection = self.client.get_or_create_collection(
+            domain_name, embedding_function=self.model
+        )
+        return collection.add(documents=documents, metadatas=metadatas, ids=ids)
 
     def __repr__(self) -> str:
         return f'<DatabaseProvider {self.__class__.__name__}>'

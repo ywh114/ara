@@ -1,5 +1,8 @@
-xdg_base_dirs
-tomli_w
-huggingface_hub
 aichar
 chromadb
+huggingface_hub
+sentence_transformers
+tomli_w
+torch
+transformers
+xdg_base_dirs

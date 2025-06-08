@@ -1,63 +1,97 @@
 #!/usr/bin/env python3
+# TODO: Rewrite
+import operator
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Any, Iterable, Iterator, Self, TypeVar, override
-from itertools import chain
+from dataclasses import dataclass, fields
+from datetime import datetime
+from typing import Any, Generic, Self, TypeVar, override
 
-from chromadb import QueryResult
-from llm.database import Database
+from chromadb import Metadata, QueryResult
+from llm.database import DatabaseProvider
+from util.exceptions import KnowledgeSpecError
 from util.logger import get_logger
 
 T = TypeVar('T', bound='KSearchSpec')
 U = TypeVar('U', bound='KReturnSpec')
 
+V = TypeVar('V', bound='KSpecExtender')
+
 logger = get_logger(__name__)
 
 
 @dataclass
-class KSearchSpecExtender:
+class KSpecExtender:
     handle: Any
+
+    def __post_init__(self) -> None:
+        self._dict = {
+            f'{name}s': getattr(self, name)
+            for x in fields(self)
+            if not (name := x.name).startswith('_')
+        }
+
+
+@dataclass
+class KSearchSpecExtender(KSpecExtender):
     instruction: str
-    n_results: int
-    max_distance: float
+    min_or_max_distance: float
+
+
+@dataclass
+class KAddSpecExtender(KSpecExtender):
+    document: str
+    metadata: Metadata
+    id: str
+
+
+@dataclass
+class NotExtendable(KSpecExtender):
+    pass
 
 
 KSSExtender = KSearchSpecExtender
+KASExtender = KAddSpecExtender
 
 
+# TODO: Integrate timestamp.
 @dataclass
-class SpecBase:
+class KSpecBase(ABC, Generic[V]):
     handles: list[Any]
-    instructions: list[str]
-    n_resultsl: list[int]
-    max_distances: list[float]
 
+    def __post_init__(self) -> None:
+        flds = {fld.name for fld in fields(self)}
+        oflds = {
+            f'{name}s'
+            for fld in fields(self._get_x())
+            if not (name := fld.name).startswith('_')
+        }
+        if delta := oflds - flds:
+            raise KnowledgeSpecError(
+                f'Extra {self._get_x()} field(s) for {self.__class__}: '
+                f'{tuple(d[:-1] for d in delta)}'
+            )
+        self._timestamp: datetime = datetime.now()
 
-@dataclass
-class KSearchSpec(SpecBase):
     @classmethod
-    def new(cls) -> Self:
-        return cls([], [], [], [])
+    @abstractmethod
+    def new(cls, *args, **kwargs) -> Self: ...
 
-    def extend(self, extender: KSearchSpecExtender) -> None:
-        self.handles += [extender.handle]
-        self.instructions += [extender.instruction]
-        self.n_resultsl += [extender.n_results]
-        self.max_distances += [extender.max_distance]
+    @classmethod
+    def _get_x(cls) -> type[V]:
+        """
+        Extract extender type from generic parameter.
 
-    def _expand(self) -> Iterator[tuple[Any, str, int]]:
-        return zip(self.handles, self.instructions, self.n_resultsl)
+        :return: The extender class type.
+        :rtype: type[T]
+        :raises SpecError: If constraints not followed.
+        """
+        for base in getattr(cls, '__orig_bases__', ()):
+            if hasattr(base, '__args__') and base.__args__:
+                arg = base.__args__[0]
+                if not isinstance(arg, TypeVar):
+                    return arg
 
-    def _flush(self) -> None:
-        self.handles = []
-        self.instructions = []
-        self.n_resultsl = []
-        self.max_distances = []
-
-
-@dataclass
-class KReturnSpec(SpecBase):
-    query_results: tuple[QueryResult, ...]
+        raise KnowledgeSpecError('Do not use bare `KSpecBase`.')
 
     def get_handle(self, handle: Any) -> int:
         try:
@@ -67,9 +101,105 @@ class KReturnSpec(SpecBase):
                 f'Handle {handle} not registered: {self.handles}.'
             ) from e
 
+    def pop_handle(self, handle: Any) -> V:
+        k = self.get_handle(handle)
+
+        return self._get_x()(
+            **{
+                name[:-1]: getattr(self, name).pop(k)
+                for fld in fields(self)
+                if not (name := fld.name).startswith('_')
+            }
+        )
+
+    def extend(self, extender: V) -> None:
+        if not isinstance(extender, self._get_x()):
+            raise KnowledgeSpecError(
+                f'Wrong spec: expected {self._get_x()}, not {type(extender)}.'
+            )
+        for k, v in extender._dict.items():
+            setattr(self, k, getattr(self, k) + [v])
+
+
+@dataclass
+class KAddSpec(KSpecBase[KAddSpecExtender]):
+    documents: list[str]
+    metadatas: list[Metadata]
+    ids: list[str]
+
+    @classmethod
+    @override
+    def new(cls) -> Self:
+        return cls([], [], [], [])
+
+
+# TODO: Rewrite
+@dataclass
+class KSearchSpec(KSpecBase[KSearchSpecExtender]):
+    instructions: list[str]
+    min_or_max_distances: list[float]
+    # Unextendable.
+    _n_results: int
+    _instruct_task: str
+    _rerank_task: str
+    _with_reranker: bool
+    _where: dict[str, str] | None
+    _where_documents: dict[str, str] | None
+    _ids: list[str] | None
+
+    @classmethod
+    @override
+    def new(
+        cls,
+        n_results: int,
+        instruct_task: str = '',
+        rerank_task: str = '',
+        with_reranker: bool = False,
+        where: dict[str, str] | None = None,
+        where_documents: dict[str, str] | None = None,
+        ids: list[str] | None = None,
+    ) -> Self:
+        return cls(
+            [],
+            [],
+            [],
+            n_results,
+            instruct_task,
+            rerank_task,
+            with_reranker,
+            where,
+            where_documents,
+            ids,
+        )
+
+    def _flush(self) -> None:
+        self.handles = []
+        self.instructions = []
+        self.min_or_max_distances = []
+
+
+@dataclass
+class KReturnSpec(KSpecBase[NotExtendable]):
+    instructions: list[str]
+    min_or_max_distances: list[float]
+    n_results_actual: list[int]
+    n_results: int
+    instruct_task: str
+    with_reranker: bool
+    where: dict[str, str] | None
+    where_documents: dict[str, str] | None
+    ids: list[str] | None
+    query_results: tuple[QueryResult, ...]
+
+    @override
+    @classmethod
+    def new(cls) -> Self:
+        raise KnowledgeSpecError('Not implemented.') from NotImplementedError
+
     def _distance_cull(self) -> None:
         qrs = self.query_results
-        ds = self.max_distances
+        ds = self.min_or_max_distances
+        operation = operator.ge if self.with_reranker else operator.le
         self.query_results = tuple(
             QueryResult(
                 distances=None
@@ -97,7 +227,7 @@ class KReturnSpec(SpecBase):
                                 if qr['distances'] is not None
                                 else [d + 1]
                             )
-                            if r <= d
+                            if operation(r, d)
                         )
                     ),
                     qr,
@@ -106,29 +236,41 @@ class KReturnSpec(SpecBase):
             )
         )
 
-        self.n_resultsl = [len(qr['ids'][0]) for qr in self.query_results]
+        self.n_results_actual = [len(qr['ids'][0]) for qr in self.query_results]
 
 
 @dataclass
 class Knowledge(ABC, dict[T, U]):
     domain_name: str
-    db: Database
+    db: DatabaseProvider
 
     @abstractmethod
-    def __perform_getitem__(self, spec: T) -> U: ...
+    def __perform_getitem__(self, spec: T) -> U:
+        """Implementation of `__getitem__`"""
 
     @abstractmethod
-    def __perform_setitem__(self, spec: T, data) -> None: ...
+    def __perform_setitem__(self, spec: T, data: U) -> None:
+        """Implementation of `__setitem__`"""
+
+    @abstractmethod
+    def simple_add(self, spec: KAddSpec) -> None:
+        """Simple insertion."""
 
     @override
     def __getitem__(self, spec: T) -> U:
+        """Get a spec."""
         ret = self.__perform_getitem__(spec)
         spec._flush()  # Flush the search spec each time.
         ret._distance_cull()  # Cull return spec based on `max_distances`.
         return ret
 
+    # NOTE: Usecase:
+    # Permanent collection X, temporary collection Y
+    # This function merges query results from Y with X.
+    # Y is cleared afterwards.
     @override
-    def __setitem__(self, spec: T, data) -> None:
+    def __setitem__(self, spec: T, data: U) -> None:
+        """Merge return data against a spec."""
         ret = self.__perform_setitem__(spec, data)
         spec._flush()  # Flush the search spec each time.
         return ret
@@ -138,50 +280,48 @@ class Knowledge(ABC, dict[T, U]):
 class RAGKnowledge(Knowledge[KSearchSpec, KReturnSpec]):
     @override
     def __perform_getitem__(self, spec: KSearchSpec) -> KReturnSpec:
-        def _permute(a: Iterable, b: Iterable, t: tuple) -> tuple:
-            index_map = {str(val): idx for idx, val in enumerate(a)}
-            permutation_indices = (index_map[str(val)] for val in b)
-            return tuple(t[i] for i in permutation_indices)
-
-        grouped: dict[int, list[str]] = {}
-        for handle, instruction, n in spec._expand():
-            grouped.setdefault(n, [])
-            grouped.setdefault(-n, [])
-            grouped[n] += [instruction]
-            grouped[-n] += [handle]
-
-        # Search in batches based on n_results
-        qrs = tuple(
-            self.db.query(self.domain_name, grouped[k], k)
-            for k in grouped
-            if k > 0
+        query_result = self.db.query(
+            domain_name=self.domain_name,
+            query_texts=spec.instructions,
+            n_results=spec._n_results,
+            instruct_task=spec._instruct_task,
+            with_reranker=spec._with_reranker,  # Rerank before culling.
+            where=spec._where,
+            where_document=spec._where_documents,
+            ids=spec._ids,
         )
-
-        logger.debug(
-            f'Performed search on {self.db}/{self.domain_name} in '
-            f'{len(grouped) // 2} batch(es).'
-        )
-
-        split_qrs = [self._split_qr(qr) for qr in qrs]
-
-        handles = spec.handles
-        permuted_handles = chain.from_iterable(
-            grouped[k] for k in grouped if k < 0
-        )
+        split_qr = self._split_qr(query_result)
 
         return KReturnSpec(
-            handles=spec.handles,  # Pass through
-            instructions=spec.instructions,  # Pass through
-            n_resultsl=spec.n_resultsl,  # Pass through
-            max_distances=spec.max_distances,  # Pass through
-            query_results=_permute(
-                handles, permuted_handles, tuple(chain(*split_qrs))
-            ),
+            handles=spec.handles,  # Pass through.
+            instructions=spec.instructions,  # Pass through.
+            n_results_actual=[],
+            n_results=spec._n_results,  # Pass through for now.
+            min_or_max_distances=spec.min_or_max_distances,  # Pass through.
+            instruct_task=spec._instruct_task,  # Pass through.
+            with_reranker=spec._with_reranker,  # Pass through
+            where=spec._where,
+            where_documents=spec._where_documents,
+            ids=spec._ids,
+            query_results=split_qr,
         )
 
     @override
     def __perform_setitem__(self, spec: KSearchSpec, data) -> None:
         pass
+
+    @override
+    def simple_add(self, spec: KAddSpec) -> None:
+        self.db.add(
+            domain_name=self.domain_name,
+            documents=spec.documents,
+            metadatas=spec.metadatas,
+            ids=spec.ids,
+        )
+        logger.debug(
+            f'Added {len(spec.documents)} items to '
+            f'{self.db}/{self.domain_name}.'
+        )
 
     @staticmethod
     def _split_qr(qr: QueryResult) -> tuple[QueryResult, ...]:
@@ -193,7 +333,7 @@ class RAGKnowledge(Knowledge[KSearchSpec, KReturnSpec]):
         urisl = qr['uris'] or None
 
         if metadatasl is None or distancesl is None:
-            raise RuntimeError('Metadatas/distances should not be None')
+            raise RuntimeError('Metadatas/distances should not be `None`.')
 
         embeddings = qr['embeddings']
         included = qr['included']

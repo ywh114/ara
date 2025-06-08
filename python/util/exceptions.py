@@ -3,3 +3,7 @@
 
 class ConfigurationError(Exception):
     pass
+
+
+class KnowledgeSpecError(Exception):
+    pass

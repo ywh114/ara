@@ -6,6 +6,7 @@ from subprocess import run  # For the example only.
 from config.config import ConfigHolder, load_conf3
 from config.config import GameConfig as GConfig
 from config.config import InstallationConfig as IConfig
+from config.structure import dfac
 from config.structure import DefaultGameSettings as DGSettings
 from config.structure import DefaultGlobalSettings, GlobalInfo
 from config.structure import DefaultInstallationSettings as DISettings
@@ -97,16 +98,67 @@ class ExampleDISettings(DISettings[ExampleISettings]):
 class ExampleGSettings(GSettings):
     # [database]
     database_embedding_model_name: str
+    database_embedding_model_type: str
+    database_embedding_model_kwargs: dict[str, str]
+    database_embedding_model_instruction_aware: bool
+    database_embedding_model_instruction_aware_fstring: str
+    database_embedding_model_tokenizer_kwargs: dict[str, str]
+    database_embedding_model_embedding_fn_kwargs: dict[
+        str, bool | int | float | str
+    ]
+    database_reranker_model_name: str
+    database_reranker_model_type: str
+    database_reranker_model_instruction_aware: bool
+    database_reranker_model_instruction_aware_fstring: str
+    database_reranker_model_kwargs: dict[str, str]
+    database_reranker_model_tokenizer_kwargs: dict[str, str]
+    database_reranker_model_embedding_fn_kwargs: dict[
+        str, bool | int | float | str
+    ]
     # [dummy]
-    dummy_int: int
+    dummy_init: bool
 
 
+# NOTE: To use flash attention:
+#   database_embedding_model_kwargs: dict[str, str] = dfac(
+#       {
+#           'attn_implementation': 'flash_attention_2',
+#           'device_map': 'auto',
+#       }
+#   )
+#   database_embedding_model_tokenizer_kwargs: dict[str, str] = dfac(
+#       {'padding_side': 'left'}
+#   )
+#   database_embedding_model_embedding_fn_kwargs = dfac(
+#       {'device': 'cuda'}
+#   )
 @dataclass
 class ExampleDGSettings(DGSettings[ExampleGSettings]):
     # [database]
-    database_embedding_model_name: str = 'BAAI/bge-small-en-v1.5'
+    database_embedding_model_name: str = 'Qwen/Qwen3-Embedding-0.6B'
+    database_embedding_model_type: str = 'SentenceTransformer'
+    database_embedding_model_instruction_aware: bool = True
+    database_embedding_model_instruction_aware_fstring: str = (
+        'Instruct: {task}\nQuery: {query}'  # Use {task} and {query} only.
+    )
+    database_embedding_model_kwargs: dict[str, str] = dfac({})
+    database_embedding_model_tokenizer_kwargs: dict[str, str] = dfac({})
+    database_embedding_model_embedding_fn_kwargs: dict[
+        str, bool | int | float | str
+    ] = dfac({})
+    database_reranker_model_name: str = 'Qwen/Qwen3-Reranker-0.6B'
+    database_reranker_model_type: str = 'CustomHuggingFace4Qwen3'
+    database_reranker_model_instruction_aware: bool = True
+    database_reranker_model_instruction_aware_fstring: str = (
+        '<Instruct>: {task}\n<Query>: {query}'  # Use {task} and {query} only.
+    )
+    database_reranker_model_kwargs: dict[str, str] = dfac({})
+    database_reranker_model_tokenizer_kwargs: dict[str, str] = dfac({})
+    database_reranker_model_embedding_fn_kwargs: dict[
+        str, bool | int | float | str
+    ] = dfac({'device': 'cuda'})  # Give GPU to expensive reranker.
     # [dummy]
-    dummy_int: int = 2
+    dummy_init: bool = False
 
 
 #######################
@@ -161,4 +213,5 @@ confh: ConfigHolder[
 )
 
 if __name__ == '__main__':
+    print(confh.games.database_embedding_model_kwargs)
     initialize_and_show(confh)

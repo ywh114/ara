@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
+# FIXME: Use `pydantic` and remove manual typechecking.
 from dataclasses import dataclass, fields
 from pathlib import Path
-from types import GenericAlias, UnionType
+from types import GenericAlias
 from typing import (
     Generic,
     Self,
@@ -26,11 +27,6 @@ _settings_item_types_allowed_tuple = (
     float,
     bool,
     Path,
-    list[str],
-    list[int],
-    list[float],
-    list[bool],
-    list[Path],
 )
 
 
@@ -100,56 +96,58 @@ class Settings:
                     if (v := conf[fld.name]) is not None
                 }
             )
-            # Enforce dataclass types.
-            # We only expect list[str], list[int], list[float], or list[bool]
-            # as `GenericAlias`es.
             # TODO: Rewrite.
+            # Enforce dataclass types.
             allowed = _settings_item_types_allowed_tuple
             for fld in flds:
                 v = getattr(settings, fld.name)
                 _T = fld.type
-                if not isinstance(_T, (type, GenericAlias)):
-                    raise TypeError(f'Bad annotation: {_T}')
-                elif not any(_T == t for t in allowed):
-                    raise TypeError(f'Field type ({_T}) not in {allowed}.')
-                try:
-                    if isinstance(_T, GenericAlias):
-                        if isinstance(v, origin := get_origin(_T)):
-                            args = get_args(_T)
-                            if len(v) == 0:
-                                continue  # Allow empty lists.
-                            elif len(args) != 1:
+                if isinstance(_T, type):
+                    if not any(_T == t for t in allowed):
+                        raise TypeError(f'Field type {_T} not in {allowed}')
+                elif isinstance(_T, GenericAlias):
+                    if isinstance(v, get_origin(_T)):
+                        args = get_args(_T)
+                        if len(v) == 0:
+                            continue  # Allow empty.
+                        elif len(args) == 1:  # Expect a list.
+                            (a0,) = args
+                            if not isinstance(v, list):
                                 raise TypeError(
-                                    'The origin must have exactly one arg, not '
-                                    f'[{args}]'
-                                )
-                            elif isinstance(a0 := args[0], UnionType):
-                                raise TypeError(
-                                    f'{origin}[arg]: arg should be a type, not '
-                                    f'`UnionType` {args}'
+                                    f'Expected a `list`, but got {_T}: {v}'
                                 )
                             elif not all(
                                 isinstance(x, a0) for x in v
-                            ):  # Enforce `origin[arg[0]]`.
+                            ):  # Enforce `origin[a0]`
                                 raise TypeError(
-                                    'All elements must be of the same type: '
-                                    f'{a0}, not '
+                                    'All elements must be of the annotated '
+                                    f'type: {a0}, not '
                                     f'{tuple(type(x) for x in v)}'
                                 )
-                            else:
-                                # Check passed.
-                                continue
-                    elif not isinstance(v, _T):
-                        raise TypeError(
-                            f'{v} ({type(v)}) is not an instanceof {_T}'
-                        )
-                except TypeError as e:
-                    raise ConfigurationError(
-                        f'Types do not match:'
-                        f'\n\tGot: {v} ({type(v)})'
-                        f'\n\tExpected: ({_T})'
-                        f'\n\tDetails: {e}'
-                    ) from e
+                        elif len(args) == 2:  # Expect a dict.
+                            a0, a1 = args
+                            if not isinstance(v, dict):
+                                raise TypeError(
+                                    f'Expected a `dict`, but got {_T}: {v}'
+                                )
+                            elif not issubclass(a0, str):
+                                raise TypeError(f'Key must be `str`, not {a0}')
+                            elif not all(
+                                isinstance(x, a0) and isinstance(y, a1)
+                                for x, y in v.items()
+                            ):  # Enforce `origin[a0, a1]`
+                                raise TypeError(
+                                    'All elements must be of the annotated '
+                                    f'type: {a0}, not '
+                                    f'{
+                                        tuple(
+                                            (type(x), type(y))
+                                            for x, y in v.items()
+                                        )
+                                    }'
+                                )
+                else:
+                    raise TypeError(f'Bad annotation: {_T}')
         except (TypeError, KeyError) as e:
             raise ConfigurationError(
                 f'Dictionary entries must match {cls}: {e}'

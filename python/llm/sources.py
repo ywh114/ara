@@ -12,6 +12,17 @@ logger = get_logger(__name__)
 
 
 def repo2dir(repo: str) -> str:
+    """
+    Convert a repository name to a directory-safe string.
+    Replaces incompatible characters in repository names to create
+    filesystem-safe directory names.
+
+    :param repo: Hugging Face repository name (e.g., 'username/model-name').
+    :return: Directory-safe version of the repository name.
+
+    Example:
+        'user/some_model' -> 'user_some_model'
+    """
     _modelname_replace_pair = ('/', '_')
     return repo.replace(*_modelname_replace_pair)
 
@@ -23,6 +34,18 @@ def downloader(
     cache_dir: Path | None = None,
     fix_missing: bool = True,
 ) -> Path:
+    """
+    Download/verify a HuggingFace repository. TODO: Support more sources.
+    Downloads the specified repository to a local directory. If the directory
+    already exists, it will check for missing files when `fix_missing=True`.
+    See https://huggingface.co/docs/huggingface_hub/v0.17.3/en/package_reference/file_download#huggingface_hub.snapshot_download.
+
+    :param repo: Hugging Face repository identifier ('username/model-name').
+    :param emb_dir: Base directory where repositories should be stored.
+    :param cache_dir: Optional cache directory. See the link for defaults.
+    :param fix_missing: Whether to repair missing files in existing directories.
+    :return: Path to the downloaded local repository.
+    """
     local_dir = emb_dir.joinpath(repo2dir(repo))
 
     # Don't attempt to fetch if the directory already exists.
