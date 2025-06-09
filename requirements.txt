@@ -1,6 +1,7 @@
 aichar
 chromadb
 huggingface_hub
+openai
 sentence_transformers
 tomli_w
 torch

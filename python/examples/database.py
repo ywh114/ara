@@ -8,3 +8,6 @@ from util.logger import get_logger
 logger = get_logger(__name__)
 
 db = Chroma(confh)
+
+if __name__ == '__main__':
+    logger.info(db)

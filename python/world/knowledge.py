@@ -4,9 +4,18 @@ import operator
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields
 from datetime import datetime
-from typing import Any, Generic, Self, TypeVar, override
+from typing import (
+    Any,
+    Callable,
+    Generic,
+    Self,
+    TypeAlias,
+    TypeVar,
+    override,
+)
 
-from chromadb import Metadata, QueryResult
+from chromadb import Documents, IDs, Metadata, Metadatas, QueryResult
+from chromadb.api.types import ID, Document
 from llm.database import DatabaseProvider
 from util.exceptions import KnowledgeSpecError
 from util.logger import get_logger
@@ -21,9 +30,20 @@ logger = get_logger(__name__)
 
 @dataclass
 class KSpecExtender:
+    """
+    Base class for knowledge specification extenders.
+    Automatically creates a dictionary mapping of field names to values (with
+    pluralized keys) during initialization.
+
+    :ivar handle: Unique identifier for the extender instance.
+    :ivar _dict: Automatically generated mapping of field names to values (with
+        pluralized keys) excluding private fields.
+    """
+
     handle: Any
 
     def __post_init__(self) -> None:
+        """Initialize the `_dict` attribute after dataclass construction."""
         self._dict = {
             f'{name}s': getattr(self, name)
             for x in fields(self)
@@ -33,32 +53,57 @@ class KSpecExtender:
 
 @dataclass
 class KSearchSpecExtender(KSpecExtender):
+    """
+    Extender for search specifications.
+
+    :ivar instruction: Query instruction for the search.
+    :ivar min_or_max_distance: Distance threshold for result filtering.
+    """
+
     instruction: str
     min_or_max_distance: float
 
 
 @dataclass
 class KAddSpecExtender(KSpecExtender):
-    document: str
+    """
+    Extender for addition specifications.
+
+    :ivar document: Document content to add.
+    :ivar metadata: Metadata associated with the document.
+    :ivar id: Unique identifier for the document.
+    """
+
+    document: Document
     metadata: Metadata
-    id: str
+    id: ID
 
 
 @dataclass
 class NotExtendable(KSpecExtender):
-    pass
+    """Placeholder class for non-extendable specifications."""
 
 
-KSSExtender = KSearchSpecExtender
-KASExtender = KAddSpecExtender
+KSSExtender: TypeAlias = KSearchSpecExtender
+KASExtender: TypeAlias = KAddSpecExtender
 
 
 # TODO: Integrate timestamp.
 @dataclass
 class KSpecBase(ABC, Generic[V]):
+    """
+    Abstract base class for knowledge specifications.
+    Provides extension capabilities for handling multiple specifications.
+    Validates extender fields during initialization.
+
+    :ivar handles: List of unique identifiers for extended specifications.
+    :ivar _timestamp: Creation timestamp of the specification.
+    """
+
     handles: list[Any]
 
     def __post_init__(self) -> None:
+        """Validate extender fields against specification fields."""
         flds = {fld.name for fld in fields(self)}
         oflds = {
             f'{name}s'
@@ -74,7 +119,8 @@ class KSpecBase(ABC, Generic[V]):
 
     @classmethod
     @abstractmethod
-    def new(cls, *args, **kwargs) -> Self: ...
+    def new(cls, *args, **kwargs) -> Self:
+        """Abstract factory method to create new specifications."""
 
     @classmethod
     def _get_x(cls) -> type[V]:
@@ -82,7 +128,7 @@ class KSpecBase(ABC, Generic[V]):
         Extract extender type from generic parameter.
 
         :return: The extender class type.
-        :rtype: type[T]
+        :rtype: type[V]
         :raises SpecError: If constraints not followed.
         """
         for base in getattr(cls, '__orig_bases__', ()):
@@ -94,6 +140,13 @@ class KSpecBase(ABC, Generic[V]):
         raise KnowledgeSpecError('Do not use bare `KSpecBase`.')
 
     def get_handle(self, handle: Any) -> int:
+        """
+        Get index position of a handle.
+
+        :param handle: Handle to locate.
+        :return: Index of the handle in the handles list.
+        :raises ValueError: If handle not found.
+        """
         try:
             return self.handles.index(handle)
         except ValueError as e:
@@ -102,6 +155,11 @@ class KSpecBase(ABC, Generic[V]):
             ) from e
 
     def pop_handle(self, handle: Any) -> V:
+        """Remove and return specification associated with a handle.
+
+        :param handle: Handle to remove.
+        :return: Extender instance containing the removed specification.
+        """
         k = self.get_handle(handle)
 
         return self._get_x()(
@@ -113,6 +171,12 @@ class KSpecBase(ABC, Generic[V]):
         )
 
     def extend(self, extender: V) -> None:
+        """
+        Extend specification with a new extender.
+
+        :param extender: Extender instance to add.
+        :raises KnowledgeSpecError: For invalid extender types.
+        """
         if not isinstance(extender, self._get_x()):
             raise KnowledgeSpecError(
                 f'Wrong spec: expected {self._get_x()}, not {type(extender)}.'
@@ -123,9 +187,17 @@ class KSpecBase(ABC, Generic[V]):
 
 @dataclass
 class KAddSpec(KSpecBase[KAddSpecExtender]):
-    documents: list[str]
-    metadatas: list[Metadata]
-    ids: list[str]
+    """
+    Specification for adding knowledge entries.
+
+    :ivar documents: List of documents to add.
+    :ivar metadatas: List of metadata dictionaries.
+    :ivar ids: List of document identifiers.
+    """
+
+    documents: Documents
+    metadatas: Metadatas
+    ids: IDs
 
     @classmethod
     @override
@@ -136,6 +208,21 @@ class KAddSpec(KSpecBase[KAddSpecExtender]):
 # TODO: Rewrite
 @dataclass
 class KSearchSpec(KSpecBase[KSearchSpecExtender]):
+    """
+    Specification for knowledge search operations.
+
+    :ivar instructions: List of query instructions.
+    :ivar min_or_max_distances: List of distance thresholds.
+    :ivar _n_results: Number of results to return.
+    :ivar _instruct_task: Instruction task type.
+    :ivar _rerank_task: Reranking task type.
+    :ivar _with_reranker: Flag to enable reranker.
+    :ivar _reranker_context: Flag to include context in reranking.
+    :ivar _where: Metadata filtering conditions.
+    :ivar _where_documents: Document content filtering conditions.
+    :ivar _ids: Specific document IDs to search.
+    """
+
     instructions: list[str]
     min_or_max_distances: list[float]
     # Unextendable.
@@ -143,9 +230,10 @@ class KSearchSpec(KSpecBase[KSearchSpecExtender]):
     _instruct_task: str
     _rerank_task: str
     _with_reranker: bool
+    _reranker_context: bool
     _where: dict[str, str] | None
     _where_documents: dict[str, str] | None
-    _ids: list[str] | None
+    _ids: IDs | None
 
     @classmethod
     @override
@@ -155,10 +243,24 @@ class KSearchSpec(KSpecBase[KSearchSpecExtender]):
         instruct_task: str = '',
         rerank_task: str = '',
         with_reranker: bool = False,
+        reranker_context: bool = False,
         where: dict[str, str] | None = None,
         where_documents: dict[str, str] | None = None,
-        ids: list[str] | None = None,
+        ids: IDs | None = None,
     ) -> Self:
+        """
+        Create new search specification.
+
+        :param n_results: Number of results to return.
+        :param instruct_task: Instruction task type.
+        :param rerank_task: Reranking task type.
+        :param with_reranker: Enable reranking.
+        :param reranker_context: Include context in reranking.
+        :param where: Metadata filtering conditions.
+        :param where_documents: Document content filtering conditions.
+        :param ids: Specific document IDs to search.
+        :return: Initialized KSearchSpec instance.
+        """
         return cls(
             [],
             [],
@@ -167,12 +269,14 @@ class KSearchSpec(KSpecBase[KSearchSpecExtender]):
             instruct_task,
             rerank_task,
             with_reranker,
+            reranker_context,
             where,
             where_documents,
             ids,
         )
 
     def _flush(self) -> None:
+        """Clear extendable specification components."""
         self.handles = []
         self.instructions = []
         self.min_or_max_distances = []
@@ -180,26 +284,65 @@ class KSearchSpec(KSpecBase[KSearchSpecExtender]):
 
 @dataclass
 class KReturnSpec(KSpecBase[NotExtendable]):
+    """
+    Specification for knowledge search results.
+
+    :ivar instructions: Original query instructions.
+    :ivar min_or_max_distances: Distance thresholds used.
+    :ivar n_results_actual: Actual number of results returned.
+    :ivar n_results: Requested number of results.
+    :ivar instruct_task: Instruction task type used.
+    :ivar with_reranker: Reranker usage flag.
+    :ivar reranker_context: Context usage in reranking.
+    :ivar where: Applied metadata filters.
+    :ivar where_documents: Applied document content filters.
+    :ivar ids: Applied ID filters.
+    :ivar query_results: Tuple of query result objects.
+    """
+
     instructions: list[str]
     min_or_max_distances: list[float]
     n_results_actual: list[int]
     n_results: int
     instruct_task: str
     with_reranker: bool
+    reranker_context: bool
     where: dict[str, str] | None
     where_documents: dict[str, str] | None
-    ids: list[str] | None
+    ids: IDs | None
     query_results: tuple[QueryResult, ...]
 
     @override
     @classmethod
     def new(cls) -> Self:
+        """
+        Not implemented factory method.
+
+        :raises KnowledgeSpecError: Always raises since not implemented.
+        """
         raise KnowledgeSpecError('Not implemented.') from NotImplementedError
 
     def _distance_cull(self) -> None:
+        """Filter results based on distance thresholds."""
         qrs = self.query_results
-        ds = self.min_or_max_distances
+        mds = self.min_or_max_distances
         operation = operator.ge if self.with_reranker else operator.le
+
+        def get_k(
+            m: float, qr: QueryResult, op: Callable[[float, float], bool]
+        ) -> int:
+            if (qrd := qr['distances']) is None:
+                return 0
+
+            ds = qrd[0]
+            r = 0
+            for d in ds:
+                if not op(d, m):
+                    return r
+                r += 1
+            else:
+                return r
+
         self.query_results = tuple(
             QueryResult(
                 distances=None
@@ -219,20 +362,10 @@ class KReturnSpec(KSpecBase[NotExtendable]):
             )
             for k, qr in (
                 (
-                    len(
-                        tuple(
-                            r
-                            for r in (
-                                qr['distances'][0]
-                                if qr['distances'] is not None
-                                else [d + 1]
-                            )
-                            if operation(r, d)
-                        )
-                    ),
+                    get_k(md, qr, operation),
                     qr,
                 )
-                for d, qr in zip(ds, qrs)
+                for md, qr in zip(mds, qrs)
             )
         )
 
@@ -241,6 +374,13 @@ class KReturnSpec(KSpecBase[NotExtendable]):
 
 @dataclass
 class Knowledge(ABC, dict[T, U]):
+    """
+    Abstract knowledge base implementing dictionary-like interface.
+
+    :ivar domain_name: Knowledge domain identifier
+    :ivar db: Database provider instance
+    """
+
     domain_name: str
     db: DatabaseProvider
 
@@ -258,7 +398,12 @@ class Knowledge(ABC, dict[T, U]):
 
     @override
     def __getitem__(self, spec: T) -> U:
-        """Get a spec."""
+        """
+        Retrieve knowledge using search specification.
+
+        :param spec: Search specification.
+        :return: Result specification.
+        """
         ret = self.__perform_getitem__(spec)
         spec._flush()  # Flush the search spec each time.
         ret._distance_cull()  # Cull return spec based on `max_distances`.
@@ -270,7 +415,12 @@ class Knowledge(ABC, dict[T, U]):
     # Y is cleared afterwards.
     @override
     def __setitem__(self, spec: T, data: U) -> None:
-        """Merge return data against a spec."""
+        """
+        Merge return data against a search specification.
+
+        :param spec: Search specification
+        :param data: Result data to merge
+        """
         ret = self.__perform_setitem__(spec, data)
         spec._flush()  # Flush the search spec each time.
         return ret
@@ -278,14 +428,28 @@ class Knowledge(ABC, dict[T, U]):
 
 @dataclass
 class RAGKnowledge(Knowledge[KSearchSpec, KReturnSpec]):
+    """
+    Retrieval-Augmented Generation knowledge implementation.
+
+    Provides concrete database operations for RAG systems.
+    """
+
     @override
     def __perform_getitem__(self, spec: KSearchSpec) -> KReturnSpec:
+        """
+        Execute search operation using database provider.
+
+        :param spec: Search specification.
+        :return: Result specification with query results.
+        :raises RuntimeError: If metadatas or distances are missing.
+        """
         query_result = self.db.query(
             domain_name=self.domain_name,
             query_texts=spec.instructions,
             n_results=spec._n_results,
             instruct_task=spec._instruct_task,
             with_reranker=spec._with_reranker,  # Rerank before culling.
+            reranker_context=spec._reranker_context,
             where=spec._where,
             where_document=spec._where_documents,
             ids=spec._ids,
@@ -293,13 +457,14 @@ class RAGKnowledge(Knowledge[KSearchSpec, KReturnSpec]):
         split_qr = self._split_qr(query_result)
 
         return KReturnSpec(
-            handles=spec.handles,  # Pass through.
-            instructions=spec.instructions,  # Pass through.
+            handles=spec.handles,
+            instructions=spec.instructions,
             n_results_actual=[],
-            n_results=spec._n_results,  # Pass through for now.
-            min_or_max_distances=spec.min_or_max_distances,  # Pass through.
-            instruct_task=spec._instruct_task,  # Pass through.
-            with_reranker=spec._with_reranker,  # Pass through
+            n_results=spec._n_results,
+            min_or_max_distances=spec.min_or_max_distances,
+            instruct_task=spec._instruct_task,
+            with_reranker=spec._with_reranker,
+            reranker_context=spec._reranker_context,
             where=spec._where,
             where_documents=spec._where_documents,
             ids=spec._ids,
@@ -308,10 +473,16 @@ class RAGKnowledge(Knowledge[KSearchSpec, KReturnSpec]):
 
     @override
     def __perform_setitem__(self, spec: KSearchSpec, data) -> None:
+        """Placeholder for result merging."""  # FIXME: Implement.
         pass
 
     @override
     def simple_add(self, spec: KAddSpec) -> None:
+        """
+        Add documents to the knowledge base.
+
+        :param spec: Add specification containing documents.
+        """
         self.db.add(
             domain_name=self.domain_name,
             documents=spec.documents,
@@ -325,6 +496,13 @@ class RAGKnowledge(Knowledge[KSearchSpec, KReturnSpec]):
 
     @staticmethod
     def _split_qr(qr: QueryResult) -> tuple[QueryResult, ...]:
+        """
+        Split combined query results into individual results.
+
+        :param qr: Combined query results.
+        :return: Tuple of individual query results.
+        :raises RuntimeError: If metadatas or distances are None.
+        """
         idsl = qr['ids']
         metadatasl = qr['metadatas']
         distancesl = qr['distances']

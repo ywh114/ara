@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Iterable, override
+from typing import Any, Iterable, override
 
-from chromadb import Documents, Metadata, PersistentClient, QueryResult
+from chromadb import (
+    Documents,
+    IDs,
+    Metadatas,
+    PersistentClient,
+    QueryResult,
+)
 from chromadb.api.types import Document
 from chromadb.utils import embedding_functions as ef
 from config.config import ConfigHolder, GameConfig, InstallationConfig
@@ -34,11 +40,11 @@ class DatabaseProvider(ABC):
         n_results: int,
         where: dict | None,
         where_document: dict | None,
-        ids: list[str] | None,
+        ids: IDs | None,
         instruct_task: str = '',
         rerank_task: str = '',
         with_reranker: bool = False,
-        rerank_threshold: float = 0.0,
+        reranker_context: bool = False,
     ) -> QueryResult:
         """
         Execute a query against the database.
@@ -52,8 +58,7 @@ class DatabaseProvider(ABC):
         :param instruct_task: Instruct task for instruction-aware embedding
             models or if using a reranker.
         :param with_reranker: Enable reranking.
-        :param rerank_threshold: Rerank if vector similarity is above a given
-            threshold.
+        :param reranker_context: Give context to the reranker.
         :return: Query results with documents and metadata.
         """
 
@@ -61,9 +66,9 @@ class DatabaseProvider(ABC):
     def add(
         self,
         domain_name: str,
-        documents: list[str],
-        metadatas: list[Metadata],
-        ids: list[str],
+        documents: Documents,
+        metadatas: Metadatas,
+        ids: IDs,
     ) -> None:
         """
         Add documents to a collection.
@@ -208,14 +213,14 @@ class Chroma(DatabaseProvider):
             repo=self.model_name,
             emb_dir=self.em_dir,
             cache_dir=self.em_dir.joinpath('.cache'),
-            fix_missing=False,  # FIXME: Change to `True` later.
+            fix_missing=not __debug__,
         )
         if self.rmodel_name:
             self.rmodel_path: Path = downloader(
                 repo=self.rmodel_name,
                 emb_dir=self.em_dir,
                 cache_dir=self.em_dir.joinpath('.cache'),
-                fix_missing=False,  # FIXME: Change to `True` later.
+                fix_missing=not __debug__,
             )
 
         # Load the embedding model.
@@ -243,7 +248,7 @@ class Chroma(DatabaseProvider):
                     **self.rembedding_fn_kwargs,
                 )
             except ValueError as e:
-                print(e)
+                raise ValueError(f'Could not load reranker model: {e}') from e
         # Load the database.
         logger.debug(f'Persistent client at {self.db_dir.joinpath(_db_name)}.')
         self.client = PersistentClient(
@@ -259,11 +264,11 @@ class Chroma(DatabaseProvider):
         n_results: int,
         where: dict | None,
         where_document: dict | None,
-        ids: list[str] | None,
+        ids: IDs | None,
         instruct_task: str = '',
         rerank_task: str = '',
         with_reranker: bool = False,
-        rerank_threshold: float = 0.0,  # TODO: Implement.
+        reranker_context: bool = False,
     ) -> QueryResult:
         """
         Execute a query against the database.
@@ -277,8 +282,7 @@ class Chroma(DatabaseProvider):
         :param instruct_task: Instruct task for instruction-aware embedding
             models or if using a reranker.
         :param with_reranker: Enable reranking.
-        :param rerank_threshold: Rerank if vector similarity is above a given
-            threshold.
+        :param reranker_context: Give context to the reranker.
         :return: Query results with documents and metadata.
         """
         logger.debug(
@@ -301,13 +305,6 @@ class Chroma(DatabaseProvider):
 
         if with_reranker and self.rmodel_name:
             if (query_result_docs := query_result['documents']) is not None:
-
-                def _reshape0(r: Iterable) -> tuple:
-                    return tuple(map(tuple, zip(*r)))
-
-                def _reshape1(r: Iterable) -> tuple:
-                    return tuple(zip(*r))
-
                 logger.debug(
                     f'{self}: reranking documents in '
                     f'{len(query_result_docs)} batches.'
@@ -315,23 +312,28 @@ class Chroma(DatabaseProvider):
                 new_distances = [
                     self.rmodel(reranker_instruct)
                     for reranker_instruct in self.format_reranker_instructs(
-                        rerank_task, query_texts, query_result_docs
+                        task=rerank_task,
+                        query_texts=query_texts,
+                        query_result_docs=query_result_docs,
+                        reranker_context=reranker_context,
                     )
                 ]
+
                 # Reorder based on new distances.
+                def _transpose(r: Iterable[tuple[Any, Any]]) -> tuple:
+                    return tuple(zip(*r))
+
                 query_result['documents'], query_result['distances'] = (
-                    _reshape0(
-                        tuple(
-                            _reshape1(
-                                sorted(
-                                    zip(query_result_doc, new_distance),
-                                    reverse=with_reranker,
-                                    key=lambda s: s[1],
-                                )
+                    _transpose(
+                        _transpose(
+                            sorted(
+                                zip(query_result_doc, new_distance),
+                                reverse=True,
+                                key=lambda s: s[1],
                             )
-                            for query_result_doc, new_distance in zip(
-                                query_result_docs, new_distances
-                            )
+                        )
+                        for query_result_doc, new_distance in zip(
+                            query_result_docs, new_distances
                         )
                     )
                 )
@@ -361,24 +363,26 @@ class Chroma(DatabaseProvider):
         task: str,
         query_texts: Documents,
         query_result_docs: list[Documents],
+        reranker_context: bool = False,  # Only for extremely short entries.
     ) -> list[list[tuple[str, str]]]:
         """
         Format context for reranker model evaluation.
-        Works?
 
         Combines:
         - Instruction task
-        - Retrieved documents as context
+          - Instruct aware: Uses `...reranker_model_instruction_aware_fstring`.
+            - Context: Adds other retrieved docs.
         - Original queries
 
         :param task: Reranking instruction task.
         :param query_texts: Original query texts.
         :param query_result_docs: Retrieved documents per query.
+        :param reranker_context: Include context. Untested.
         :return: Formatted reranker inputs.
         """
         if not task:
             task = 'Retrieve passages relevant to the query.'
-        if self.reranker_instruct_aware:
+        if reranker_context and self.reranker_instruct_aware:
             task += '\nContext:\n{context}'
 
         def reformat(
@@ -403,9 +407,9 @@ class Chroma(DatabaseProvider):
     def add(
         self,
         domain_name: str,
-        documents: list[str],
-        metadatas: list[Metadata],
-        ids: list[str],
+        documents: Documents,
+        metadatas: Metadatas,
+        ids: IDs,
     ) -> None:
         """
         Add documents to a collection.

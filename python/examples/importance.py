@@ -16,7 +16,7 @@ class TaskPriority(Importance, isplit=isplit):
 
 
 # Simulate task prioritization
-def simulate_task_prioritization():
+def demo_importance():
     logger.info(f'Start importance example (isplit={isplit})')
 
     # Create task priorities
@@ -62,4 +62,4 @@ def simulate_task_prioritization():
 
 
 if __name__ == '__main__':
-    simulate_task_prioritization()
+    demo_importance()

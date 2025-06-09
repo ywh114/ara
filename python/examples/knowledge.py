@@ -78,25 +78,32 @@ def dummy_setup():
 # Initialize a dummy database.
 if not confh.games.dummy_init:
     dummy_setup()
-    confh.games.dummy_init = True
+    confh.games.dummy_init = True  # Flip.
     confh.export_conf3()
 
-spec = KSearchSpec.new(
-    n_results=5,
-    instruct_task='Retrieve passages that directly relate to the query.',
-    rerank_task='Given a web search query, retrieve relevant passages that answer the query.',
-    with_reranker=False,
-)
 
-x = 0.5
+def demo_search():
+    spec = KSearchSpec.new(
+        n_results=5,
+        instruct_task='Retrieve passages that directly relate to the query.',
+        rerank_task='Given a web search query, retrieve relevant passages that answer the query.',
+        with_reranker=True,
+        reranker_context=True,
+    )
 
-spec.extend(KSSExtender(0, 'Who was Feanor?', x))
-spec.extend(KSSExtender(1, 'Who were the Teleri?', x))
-spec.extend(KSSExtender(2, 'Where did the elves awaken?', x))
-spec.extend(KSSExtender(3, 'What happened at the Swanhaven?', x))
-r = spec.pop_handle(2)
+    x = -100
 
-pp(world_knowledge[spec])
+    spec.extend(KSSExtender(0, 'Who was Feanor?', x))
+    spec.extend(KSSExtender(1, 'Who were the Teleri?', x))
+    spec.extend(KSSExtender(2, 'Where did the elves awaken?', x))
+    spec.extend(KSSExtender(3, 'What happened at the Swanhaven?', x))
+    r = spec.pop_handle(2)
 
-spec.extend(r)
-pp(world_knowledge[spec])
+    pp(world_knowledge[spec])
+
+    spec.extend(r)
+    pp(world_knowledge[spec])
+
+
+if __name__ == '__main__':
+    demo_search()

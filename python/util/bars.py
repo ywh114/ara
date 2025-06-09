@@ -252,8 +252,7 @@ class Trigger:
             copy (see `Bar`).
         :return: A `TriggerResult` object.
         """
-        if bar._prev_bar is None:  # For the type checker :)
-            raise ValueError(f'Recieved a bar with no history:\n{bar}')
+        assert bar._prev_bar is not None
 
         check_functions = (
             self._check_edge_trigger,

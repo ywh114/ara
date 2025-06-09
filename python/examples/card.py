@@ -15,4 +15,6 @@ cardh = CardHolder.load_png(
     init_path=example_assets.joinpath(example_card),
 )
 
-logger.info(cardh)
+
+if __name__ == '__main__':
+    logger.info(cardh)

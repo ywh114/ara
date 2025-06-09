@@ -1,33 +1,23 @@
 #!/usr/bin/env python3
-# FIXME: Use `pydantic` and remove manual typechecking.
-from dataclasses import dataclass, fields
+from dataclasses import fields
 from pathlib import Path
-from types import GenericAlias
 from typing import (
     Generic,
     Self,
     TypeVar,
-    get_args,
-    get_origin,
     override,
 )
 
+from pydantic.dataclasses import dataclass
 from util.exceptions import ConfigurationError
 from util.logger import get_logger
+
+# NOTE: Use pydantic for verification when loading from files.
 
 logger = get_logger(__name__)
 
 T = TypeVar('T', bound='Settings')
 U = TypeVar('U', bound='DefaultSettings')
-
-
-_settings_item_types_allowed_tuple = (
-    str,
-    int,
-    float,
-    bool,
-    Path,
-)
 
 
 @dataclass
@@ -71,87 +61,20 @@ class Settings:
         :raises ConfigurationError: If dictionary structure does not match
             settings field types or constraints.
         """
-        flds = fields(cls)
-        try:
-            # Keys must match.
-            conf_keyset = set(conf.keys())
-            cls_keyset = set(fld.name for fld in flds)
-            if conf_keyset != cls_keyset:
-                raise KeyError(
-                    f'Keys do not match: \n\tDictionary keys: {conf_keyset}'
-                    f'\n\t{cls} keys: {cls_keyset}'
+        # Build the object.
+        settings = cls(
+            **{
+                fld.name: (
+                    Path(v)
+                    if fld.type is Path
+                    else list(map(Path, v))
+                    if fld.type == list[Path]
+                    else v
                 )
-
-            # Build the object.
-            settings = cls(
-                **{
-                    fld.name: (
-                        Path(v)
-                        if fld.type is Path
-                        else list(map(Path, v))
-                        if fld.type == list[Path]
-                        else v
-                    )
-                    for fld in fields(cls)
-                    if (v := conf[fld.name]) is not None
-                }
-            )
-            # TODO: Rewrite.
-            # Enforce dataclass types.
-            allowed = _settings_item_types_allowed_tuple
-            for fld in flds:
-                v = getattr(settings, fld.name)
-                _T = fld.type
-                if isinstance(_T, type):
-                    if not any(_T == t for t in allowed):
-                        raise TypeError(f'Field type {_T} not in {allowed}')
-                elif isinstance(_T, GenericAlias):
-                    if isinstance(v, get_origin(_T)):
-                        args = get_args(_T)
-                        if len(v) == 0:
-                            continue  # Allow empty.
-                        elif len(args) == 1:  # Expect a list.
-                            (a0,) = args
-                            if not isinstance(v, list):
-                                raise TypeError(
-                                    f'Expected a `list`, but got {_T}: {v}'
-                                )
-                            elif not all(
-                                isinstance(x, a0) for x in v
-                            ):  # Enforce `origin[a0]`
-                                raise TypeError(
-                                    'All elements must be of the annotated '
-                                    f'type: {a0}, not '
-                                    f'{tuple(type(x) for x in v)}'
-                                )
-                        elif len(args) == 2:  # Expect a dict.
-                            a0, a1 = args
-                            if not isinstance(v, dict):
-                                raise TypeError(
-                                    f'Expected a `dict`, but got {_T}: {v}'
-                                )
-                            elif not issubclass(a0, str):
-                                raise TypeError(f'Key must be `str`, not {a0}')
-                            elif not all(
-                                isinstance(x, a0) and isinstance(y, a1)
-                                for x, y in v.items()
-                            ):  # Enforce `origin[a0, a1]`
-                                raise TypeError(
-                                    'All elements must be of the annotated '
-                                    f'type: {a0}, not '
-                                    f'{
-                                        tuple(
-                                            (type(x), type(y))
-                                            for x, y in v.items()
-                                        )
-                                    }'
-                                )
-                else:
-                    raise TypeError(f'Bad annotation: {_T}')
-        except (TypeError, KeyError) as e:
-            raise ConfigurationError(
-                f'Dictionary entries must match {cls}: {e}'
-            ) from e
+                for fld in fields(cls)
+                if (v := conf[fld.name]) is not None
+            }
+        )
 
         logger.debug(f'Loaded {cls.__name__}.')
         debug_contents_str = f'{cls.__name__} contents:\n'
@@ -164,6 +87,23 @@ class Settings:
 @dataclass
 class DefaultSettings(Settings, Generic[T]):
     """Provides default values for settings classes."""
+
+    @classmethod
+    def __post_init__(cls):
+        a = cls
+        b = cls._get_base()
+        a_fields = set((fld.name, fld.type) for fld in fields(cls))
+        b_fields = set((fld.name, fld.type) for fld in fields(cls._get_base()))
+        ab = a_fields - b_fields
+        ba = b_fields - a_fields
+        if ab:
+            raise ConfigurationError(
+                f'Extra fields in default settings: {ab}, in {a}/{b}'
+            )
+        if ba:
+            raise ConfigurationError(
+                f'All fields must be explicitly declared: {ba}, in {a}/{b}'
+            )
 
     @classmethod
     def _get_base(cls) -> type[T]:

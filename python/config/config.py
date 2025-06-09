@@ -8,6 +8,7 @@ from typing import (
     TypeVar,
 )
 
+from pydantic import ValidationError
 import tomli_w
 import tomllib
 from config.settings import (
@@ -185,7 +186,10 @@ class Config(Generic[T, U]):
         :rtype: Self
         """
         conf = cls.flatten_dict(cls.tomllib_load_or_create(config_path))
-        settings: T = DSettings.load_dict(conf)
+        try:
+            settings: T = DSettings.load_dict(conf)
+        except ValidationError as e:
+            raise ConfigurationError(f'Badly typed value: {e}') from e
 
         logger.debug(f'Loaded {cls.__name__} from {cls._get_u().__name__}.')
         return cls(config_path, settings)

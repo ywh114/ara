@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
+    TypeAlias,
     TypeVar,
 )
 from config.settings import Settings, DefaultSettings
@@ -71,7 +72,8 @@ class DefaultGlobalSettings(DefaultSettings[GlobalSettings]):
     projects: list[str] = dfac([])
 
 
-GlobS, DGlobS = GlobalSettings, DefaultGlobalSettings
+GlobS: TypeAlias = GlobalSettings
+DGlobS: TypeAlias = DefaultGlobalSettings
 
 
 # NOTE: Subclass from installation and game settings. Avoid modifying any global
@@ -116,7 +118,7 @@ class InstallationSettings(Settings):
 
 
 @dataclass
-class DefaultInstallationSettings(DefaultSettings[V], InstallationSettings):
+class DefaultInstallationSettings(DefaultSettings[V]):
     """Default values for installation settings."""
 
     # [project]
@@ -152,9 +154,9 @@ class GameSettings(Settings):
     # [database]
     database_embedding_model_name: str
     database_embedding_model_type: str
-    database_embedding_model_kwargs: dict[str, str]
     database_embedding_model_instruction_aware: bool
     database_embedding_model_instruction_aware_fstring: str
+    database_embedding_model_kwargs: dict[str, str]
     database_embedding_model_tokenizer_kwargs: dict[str, str]
     database_embedding_model_embedding_fn_kwargs: dict[
         str, bool | int | float | str
@@ -169,11 +171,9 @@ class GameSettings(Settings):
         str, bool | int | float | str
     ]
 
-    pass
-
 
 @dataclass
-class DefaultGameSettings(DefaultSettings[X], GameSettings):
+class DefaultGameSettings(DefaultSettings[X]):
     """Base class for default game-specific settings."""
 
     # [database]

@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-from dataclasses import dataclass, field
+from dataclasses import field
 from pathlib import Path
 from subprocess import run  # For the example only.
 
 from config.config import ConfigHolder, load_conf3
 from config.config import GameConfig as GConfig
 from config.config import InstallationConfig as IConfig
-from config.structure import dfac
 from config.structure import DefaultGameSettings as DGSettings
-from config.structure import DefaultGlobalSettings, GlobalInfo
+from config.structure import DefaultGlobalSettings, GlobalInfo, dfac
 from config.structure import DefaultInstallationSettings as DISettings
 from config.structure import GameSettings as GSettings
 from config.structure import InstallationSettings as ISettings
+from pydantic.dataclasses import dataclass
 from util.logger import get_logger
+
+# NOTE: Use pydantic for verification when loading from files.
 
 logger = get_logger(__name__)
 
@@ -182,7 +184,6 @@ def initialize_and_show(confh: ConfigHolder) -> None:
 
         logger.info(result.stdout)
 
-    confh.export_conf3()  # Create files.
     logger.info(f'Initialized `{project_name}` under `{fakehome}`.')
     input(f"tree '{fakehome}' (enter to run) ")
     logrun('tree', fakehome)
@@ -213,5 +214,4 @@ confh: ConfigHolder[
 )
 
 if __name__ == '__main__':
-    print(confh.games.database_embedding_model_kwargs)
     initialize_and_show(confh)
