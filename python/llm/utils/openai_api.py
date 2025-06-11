@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
-import os
+# TODO: Implement profiles.
+# TODO: Add environment variable name to settings.
 from typing import (
     Any,
     Iterable,
-    Iterator,
     Literal,
-    TypeVar,
+    TypeAlias,
     TypedDict,
     overload,
+)
+
+from llm.utils.stream import (
+    ContentStr,
+    CustomChunkToStr,
+    CustomStreamHandler,
+    CustomStreamHook,
+    DeltaStr,
+    ReasoningContentStr,
+    no_hook,
 )
 from openai import NotGiven, OpenAI, Stream
 from openai.types.chat import (
@@ -19,27 +29,12 @@ from openai.types.chat import (
 )
 from openai.types.chat.completion_create_params import ResponseFormat
 
-sk = os.environ[
-    'DEEPSEEK_API_KEY'
-]  # TODO: Add environment variable name to settings.
-
-print(sk)
-
-
-T = TypeVar('T')
-
-
-class CustomStreamHandler(Iterator[T]):
-    def __init__(self, stream: Stream[T]) -> None:
-        self.stream = stream
-        self._iterator = (chunk for chunk in stream)
-
-    def __next__(self) -> T:
-        return next(self._iterator)
+FinishReason: TypeAlias = Literal[
+    'stop', 'length', 'tool_calls', 'content_filter', 'function_call'
+]
 
 
 class ExtraPayloadContents(TypedDict):
-    # NOTE: Does not include `stream`.
     frequency_penalty: float | NotGiven
     max_tokens: int | NotGiven
     presence_penalty: float | NotGiven
@@ -53,8 +48,8 @@ class ExtraPayloadContents(TypedDict):
     logprobs: bool | NotGiven
 
 
-class LLM:
-    """Wrapper for OpenAI API."""
+class APIWrapper:
+    """Wrapper for OpenAI-style API."""
 
     _completion_kwargs_default: ExtraPayloadContents = {
         'frequency_penalty': NotGiven(),
@@ -75,12 +70,19 @@ class LLM:
         api_key: str,
         base_url: str,
         model: str,
+        system_prompt: str,
+        stream_hook: CustomStreamHook = no_hook,
         openai_kwargs: dict[str, Any] | None = None,
+        reasoning_field_name: str = 'reasoning_content',
     ) -> None:
         self.client = OpenAI(
             api_key=api_key, base_url=base_url, **(openai_kwargs or {})
         )
         self.model = model
+        self.system_prompt = system_prompt
+        self.stream_hook = stream_hook
+        self.reasoning_field_name = reasoning_field_name
+
         self._completion_kwargs: ExtraPayloadContents = (
             self._completion_kwargs_default.copy()
         )
@@ -91,11 +93,10 @@ class LLM:
     @overload
     def completion(
         self, *args, stream: Literal[True], **kwargs
-    ) -> Stream[ChatCompletionChunk]: ...
+    ) -> CustomStreamHandler[ChatCompletionChunk]: ...
 
     def completion(
         self,
-        system_prompt: str,
         user_prompt: str,
         reuse_options: bool = False,
         *,
@@ -111,7 +112,7 @@ class LLM:
         tools: Iterable[ChatCompletionToolParam] | None = None,
         tool_choice: ChatCompletionToolChoiceOptionParam | None = None,
         logprobs: bool | None = None,
-    ) -> str | Stream[ChatCompletionChunk]:
+    ) -> str | CustomStreamHandler[ChatCompletionChunk]:
         if not reuse_options:  # Ignore without warning.
             self._completion_kwargs = {
                 'frequency_penalty': frequency_penalty or NotGiven(),
@@ -130,7 +131,7 @@ class LLM:
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[
-                {'role': 'system', 'content': system_prompt},
+                {'role': 'system', 'content': self.system_prompt},
                 {'role': 'user', 'content': user_prompt},
             ],
             stream=stream,
@@ -142,18 +143,22 @@ class LLM:
             return response.choices[0].message.content or ''
         else:
             assert isinstance(response, Stream)
-            return response
+            return CustomStreamHandler(
+                response,
+                to_str=CustomChunkToStr(self._chunk_to_str),
+                hook=self.stream_hook,
+            )
 
+    def _chunk_to_str(self, chunk: ChatCompletionChunk) -> DeltaStr:
+        cd = chunk.choices[0].delta
 
-llm = LLM(sk, 'https://api.deepseek.com', model='deepseek-chat')
+        # For reasoning models.
+        if hasattr(cd, self.reasoning_field_name):
+            if (c := getattr(cd, self.reasoning_field_name)) is not None:
+                assert isinstance(c, str)
+                return ReasoningContentStr(c)
 
-r = llm.completion(
-    'You are a helpful assistant',
-    'Hello',
-    stream=True,
-)
-
-for chunk in r:
-    print(chunk.choices)
-
-print(r.response)
+        if cd.content is not None:
+            return ContentStr(cd.content)
+        else:
+            return ContentStr()

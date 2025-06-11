@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from world.importance import Importance, ImportanceType, imauto
-from util.logger import get_logger
+from utils.logger import get_logger
 
 
 logger = get_logger(__name__)

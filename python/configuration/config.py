@@ -11,11 +11,11 @@ from typing import (
 from pydantic import ValidationError
 import tomli_w
 import tomllib
-from config.settings import (
+from configuration.settings import (
     T,
     U,
 )
-from config.structure import (
+from configuration.structure import (
     DefaultGlobalSettings,
     GlobalSettings,
     V,
@@ -23,8 +23,8 @@ from config.structure import (
     X,
     Y,
 )
-from util.exceptions import ConfigurationError
-from util.logger import get_logger
+from utils.exceptions import ConfigurationError
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 

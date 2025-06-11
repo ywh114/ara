@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-from util.logger import get_logger
+from utils.logger import get_logger
 from typing import Iterable
 from uuid import uuid4
 
-from util.bars import (
+from utils.bars import (
     Bar,
     BarOp,
     EdgePart,

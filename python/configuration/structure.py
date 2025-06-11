@@ -6,7 +6,7 @@ from typing import (
     TypeAlias,
     TypeVar,
 )
-from config.settings import Settings, DefaultSettings
+from configuration.settings import Settings, DefaultSettings
 
 import xdg_base_dirs as xdg
 

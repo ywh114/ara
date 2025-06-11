@@ -6,7 +6,7 @@ from operator import or_
 from typing import Callable, Iterable, NamedTuple, TypeAlias
 from uuid import UUID
 
-from util.logger import get_logger
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 

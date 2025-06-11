@@ -2,7 +2,7 @@
 from examples.config import confh
 from llm.database import Chroma
 
-from util.logger import get_logger
+from utils.logger import get_logger
 
 
 logger = get_logger(__name__)

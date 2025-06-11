@@ -3,16 +3,21 @@ from dataclasses import field
 from pathlib import Path
 from subprocess import run  # For the example only.
 
-from config.config import ConfigHolder, load_conf3
-from config.config import GameConfig as GConfig
-from config.config import InstallationConfig as IConfig
-from config.structure import DefaultGameSettings as DGSettings
-from config.structure import DefaultGlobalSettings, GlobalInfo, dfac
-from config.structure import DefaultInstallationSettings as DISettings
-from config.structure import GameSettings as GSettings
-from config.structure import InstallationSettings as ISettings
+from configuration import (
+    ConfigHolder,
+    DefaultGlobalSettings,
+    GlobalInfo,
+    dfac,
+    load_conf3,
+)
+from configuration import DefaultGameSettings as DGSettings
+from configuration import DefaultInstallationSettings as DISettings
+from configuration import GameConfig as GConfig
+from configuration import GameSettings as GSettings
+from configuration import InstallationConfig as IConfig
+from configuration import InstallationSettings as ISettings
 from pydantic.dataclasses import dataclass
-from util.logger import get_logger
+from utils.logger import get_logger
 
 # NOTE: Use pydantic for verification when loading from files.
 

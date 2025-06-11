@@ -2,7 +2,7 @@
 from pathlib import Path
 
 from huggingface_hub import snapshot_download
-from util.logger import get_logger
+from utils.logger import get_logger
 
 
 # TODO: Support multiple sources

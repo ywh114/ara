@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import logging
 from typing import TypeAlias
-from util.ansi import GREEN, LIGHTGREY, YELLOW, RED, BOLD, RESET
+from utils.ansi import GREEN, LIGHTGREY, YELLOW, RED, BOLD, RESET
 
 _Level: TypeAlias = str | int
 

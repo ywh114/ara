@@ -12,7 +12,7 @@ from transformers import (
     AutoTokenizer,
 )
 from transformers.tokenization_utils_base import BatchEncoding
-from util.logger import get_logger
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 

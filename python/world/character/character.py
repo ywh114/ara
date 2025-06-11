@@ -4,7 +4,7 @@ from uuid import UUID
 
 from character.card import CardHolder
 from character.memory import Memory
-from util.bars import BarManager
+from utils.bars import BarManager
 from world.importance import ImportanceType
 
 

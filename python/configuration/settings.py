@@ -9,8 +9,8 @@ from typing import (
 )
 
 from pydantic.dataclasses import dataclass
-from util.exceptions import ConfigurationError
-from util.logger import get_logger
+from utils.exceptions import ConfigurationError
+from utils.logger import get_logger
 
 # NOTE: Use pydantic for verification when loading from files.
 

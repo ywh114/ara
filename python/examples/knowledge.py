@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from examples.config import confh
 from examples.database import db
 from world.knowledge import (

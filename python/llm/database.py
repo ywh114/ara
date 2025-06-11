@@ -18,8 +18,8 @@ from llm.reranker import (
     CustomHuggingFace4Qwen3RerankerFunction,
     CustomHuggingFaceRerankerFunction,
 )
-from llm.sources import downloader
-from util.logger import get_logger
+from llm.utils.sources import downloader
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 

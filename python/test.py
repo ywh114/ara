@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from typing import reveal_type
 import torch
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 

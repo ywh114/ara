@@ -17,8 +17,8 @@ from typing import (
 from chromadb import Documents, IDs, Metadata, Metadatas, QueryResult
 from chromadb.api.types import ID, Document
 from llm.database import DatabaseProvider
-from util.exceptions import KnowledgeSpecError
-from util.logger import get_logger
+from utils.exceptions import KnowledgeSpecError
+from utils.logger import get_logger
 
 T = TypeVar('T', bound='KSearchSpec')
 U = TypeVar('U', bound='KReturnSpec')

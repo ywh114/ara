@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from uuid import uuid4
 
-from util.logger import get_logger
+from utils.logger import get_logger
 from world.character.card import CardHolder
 
 from examples.config import confh, example_assets

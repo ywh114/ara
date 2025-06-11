@@ -1,5 +1,32 @@
 #!/usr/bin/env python3
 # ANSI escape sequences
+__all__ = [
+    'BLACK',
+    'DARKGRAY',
+    'DARKGREY',
+    'DARKRED',
+    'RED',
+    'DARKGREEN',
+    'GREEN',
+    'DARKYELLOW',
+    'YELLOW',
+    'DARKBLUE',
+    'BLUE',
+    'DARKMAGENTA',
+    'MAGENTA',
+    'DARKCYAN',
+    'CYAN',
+    'LIGHTGRAY',
+    'LIGHTGREY',
+    'WHITE',
+    'UNDERLINE',
+    'NOUNDERLINE',
+    'BOLD',
+    'NOBOLD',
+    'RESET',
+    'CLEAR',
+]
+
 BLACK = '\033[30m'
 DARKGRAY = DARKGREY = '\033[90m'
 
