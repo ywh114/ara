@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import logging
 from typing import TypeAlias
-from utils.ansi import GREEN, LIGHTGREY, YELLOW, RED, BOLD, RESET
+from utils.ansi import END, GREEN, LIGHTGREY, YELLOW, RED, BOLD
 
 _Level: TypeAlias = str | int
 
@@ -11,11 +11,11 @@ class ColorFormatter(logging.Formatter):
     format1 = '%(asctime)s - %(name)s: %(levelname)s - %(message)s (%(filename)s:%(lineno)d)'
 
     FORMATS = {
-        logging.DEBUG: LIGHTGREY + format1 + RESET,
-        logging.INFO: GREEN + format0 + RESET,
-        logging.WARNING: YELLOW + format1 + RESET,
-        logging.ERROR: RED + format1 + RESET,
-        logging.CRITICAL: BOLD + RED + format1 + RESET,
+        logging.DEBUG: LIGHTGREY + format1 + END,
+        logging.INFO: GREEN + format0 + END,
+        logging.WARNING: YELLOW + format1 + END,
+        logging.ERROR: RED + format1 + END,
+        logging.CRITICAL: BOLD + RED + format1 + END,
     }
 
     def format(self, record):

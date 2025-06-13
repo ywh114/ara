@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
-# TODO: Implement profiles.
-# TODO: Add environment variable name to settings.
+# TODO: Write ConversationManager for multiround.
+# TODO: Add conversations to db.
+from functools import partial
 from typing import (
     Any,
+    Callable,
+    Generator,
     Iterable,
     Literal,
     TypeAlias,
     TypedDict,
     overload,
+    override,
 )
 
 from llm.utils.stream import (
+    CompletionFn,
     ContentStr,
     CustomChunkToStr,
+    CustomResponseStr,
     CustomStreamHandler,
     CustomStreamHook,
     DeltaStr,
@@ -29,9 +35,13 @@ from openai.types.chat import (
 )
 from openai.types.chat.completion_create_params import ResponseFormat
 
+from python.utils.logger import get_logger
+
 FinishReason: TypeAlias = Literal[
     'stop', 'length', 'tool_calls', 'content_filter', 'function_call'
 ]
+
+logger = get_logger(__name__)
 
 
 class ExtraPayloadContents(TypedDict):
@@ -48,8 +58,8 @@ class ExtraPayloadContents(TypedDict):
     logprobs: bool | NotGiven
 
 
-class APIWrapper:
-    """Wrapper for OpenAI-style API."""
+class LLMProfile:
+    """Profile for OpenAI-style API."""
 
     _completion_kwargs_default: ExtraPayloadContents = {
         'frequency_penalty': NotGiven(),
@@ -65,6 +75,7 @@ class APIWrapper:
         'logprobs': NotGiven(),
     }
 
+    # TODO: Unify hook for both stream and non-stream.
     def __init__(
         self,
         api_key: str,
@@ -72,6 +83,7 @@ class APIWrapper:
         model: str,
         system_prompt: str,
         stream_hook: CustomStreamHook = no_hook,
+        completion_kwargs: ExtraPayloadContents | None = None,
         openai_kwargs: dict[str, Any] | None = None,
         reasoning_field_name: str = 'reasoning_content',
     ) -> None:
@@ -83,78 +95,175 @@ class APIWrapper:
         self.stream_hook = stream_hook
         self.reasoning_field_name = reasoning_field_name
 
-        self._completion_kwargs: ExtraPayloadContents = (
-            self._completion_kwargs_default.copy()
+        self.completion_kwargs = (
+            completion_kwargs or self._completion_kwargs_default
         )
 
-    @overload
-    def completion(self, *args, stream: Literal[False], **kwargs) -> str: ...
+
+class LLMWrapper(dict[str, LLMProfile]):
+    def __init__(self, profiles: dict[str, LLMProfile] | None = None) -> None:
+        self.profiles = profiles or {}
+
+    @override
+    def __setitem__(self, key: str, profile: LLMProfile, /) -> None:
+        self.profiles |= {key: profile}
+
+    @override
+    def __getitem__(self, key: str, /) -> LLMProfile:
+        return self.profiles[key]
+
+    @override
+    def __delitem__(self, key: str) -> None:
+        del self.profiles[key]
 
     @overload
     def completion(
-        self, *args, stream: Literal[True], **kwargs
+        self,
+        profile_key: str,
+        user_prompt: str,
+        /,
+        stream: Literal[False],
+        *,
+        frequency_penalty: float | NotGiven | None = None,
+        max_tokens: int | NotGiven | None = None,
+        presence_penalty: float | NotGiven | None = None,
+        response_format: ResponseFormat | NotGiven | None = None,
+        stop: str | NotGiven | None = None,
+        stream_options: ChatCompletionStreamOptionsParam
+        | NotGiven
+        | None = None,
+        temperature: float | NotGiven | None = None,
+        top_p: int | NotGiven | None = None,
+        tools: Iterable[ChatCompletionToolParam] | NotGiven | None = None,
+        tool_choice: ChatCompletionToolChoiceOptionParam
+        | NotGiven
+        | None = None,
+        logprobs: bool | NotGiven | None = None,
+    ) -> CustomResponseStr: ...
+
+    @overload
+    def completion(
+        self,
+        profile_key: str,
+        user_prompt: str,
+        /,
+        stream: Literal[True],
+        *,
+        frequency_penalty: float | NotGiven | None = None,
+        max_tokens: int | NotGiven | None = None,
+        presence_penalty: float | NotGiven | None = None,
+        response_format: ResponseFormat | NotGiven | None = None,
+        stop: str | NotGiven | None = None,
+        stream_options: ChatCompletionStreamOptionsParam
+        | NotGiven
+        | None = None,
+        temperature: float | NotGiven | None = None,
+        top_p: int | NotGiven | None = None,
+        tools: Iterable[ChatCompletionToolParam] | NotGiven | None = None,
+        tool_choice: ChatCompletionToolChoiceOptionParam
+        | NotGiven
+        | None = None,
+        logprobs: bool | NotGiven | None = None,
     ) -> CustomStreamHandler[ChatCompletionChunk]: ...
 
     def completion(
         self,
+        profile_key: str,
         user_prompt: str,
-        reuse_options: bool = False,
-        *,
+        /,
         stream: bool = False,
-        frequency_penalty: float | None = None,
-        max_tokens: int | None = None,
-        presence_penalty: float | None = None,
-        response_format: ResponseFormat | None = None,
-        stop: str | None = None,
-        stream_options: ChatCompletionStreamOptionsParam | None = None,
-        temperature: float | None = None,
-        top_p: int | None = None,
-        tools: Iterable[ChatCompletionToolParam] | None = None,
-        tool_choice: ChatCompletionToolChoiceOptionParam | None = None,
-        logprobs: bool | None = None,
+        *,
+        frequency_penalty: float | NotGiven | None = None,
+        max_tokens: int | NotGiven | None = None,
+        presence_penalty: float | NotGiven | None = None,
+        response_format: ResponseFormat | NotGiven | None = None,
+        stop: str | NotGiven | None = None,
+        stream_options: ChatCompletionStreamOptionsParam
+        | NotGiven
+        | None = None,
+        temperature: float | NotGiven | None = None,
+        top_p: int | NotGiven | None = None,
+        tools: Iterable[ChatCompletionToolParam] | NotGiven | None = None,
+        tool_choice: ChatCompletionToolChoiceOptionParam
+        | NotGiven
+        | None = None,
+        logprobs: bool | NotGiven | None = None,
     ) -> str | CustomStreamHandler[ChatCompletionChunk]:
-        if not reuse_options:  # Ignore without warning.
-            self._completion_kwargs = {
-                'frequency_penalty': frequency_penalty or NotGiven(),
-                'max_tokens': max_tokens or NotGiven(),
-                'presence_penalty': presence_penalty or NotGiven(),
-                'response_format': response_format or NotGiven(),
-                'stop': stop or NotGiven(),
-                'stream_options': stream_options or NotGiven(),
-                'temperature': temperature or NotGiven(),
-                'top_p': top_p or NotGiven(),
-                'tools': tools or NotGiven(),
-                'tool_choice': tool_choice or NotGiven(),
-                'logprobs': logprobs or NotGiven(),
-            }
+        profile = self.profiles[profile_key]
+        instance_completion_kwargs: ExtraPayloadContents = {
+            'frequency_penalty': frequency_penalty or NotGiven(),
+            'max_tokens': max_tokens or NotGiven(),
+            'presence_penalty': presence_penalty or NotGiven(),
+            'response_format': response_format or NotGiven(),
+            'stop': stop or NotGiven(),
+            'stream_options': stream_options or NotGiven(),
+            'temperature': temperature or NotGiven(),
+            'top_p': top_p or NotGiven(),
+            'tools': tools or NotGiven(),
+            'tool_choice': tool_choice or NotGiven(),
+            'logprobs': logprobs or NotGiven(),
+        }
 
-        response = self.client.chat.completions.create(
-            model=self.model,
+        completion_kwargs = self._merge_payloads(
+            instance_completion_kwargs, profile.completion_kwargs
+        )
+
+        logger.debug(
+            f'Sent request to {profile.client.base_url} {profile.model}.'
+        )
+        response = profile.client.chat.completions.create(
+            model=profile.model,
             messages=[
-                {'role': 'system', 'content': self.system_prompt},
+                {'role': 'system', 'content': profile.system_prompt},
                 {'role': 'user', 'content': user_prompt},
             ],
             stream=stream,
-            **self._completion_kwargs,
+            **completion_kwargs,
         )
 
+        rfn = profile.reasoning_field_name
         if not stream:
             assert isinstance(response, ChatCompletion)
-            return response.choices[0].message.content or ''
-        else:
-            assert isinstance(response, Stream)
-            return CustomStreamHandler(
-                response,
-                to_str=CustomChunkToStr(self._chunk_to_str),
-                hook=self.stream_hook,
+            cm = response.choices[0].message
+            return (
+                CustomResponseStr()
+                + (
+                    ReasoningContentStr()
+                    if not hasattr(cm, rfn)
+                    else ReasoningContentStr(getattr(cm, rfn))
+                )
+                + ContentStr(cm.content)
             )
 
-    def _chunk_to_str(self, chunk: ChatCompletionChunk) -> DeltaStr:
+        else:
+            assert isinstance(response, Stream)
+            to_str = CustomChunkToStr(
+                partial(
+                    self._chunk_to_str,
+                    reasoning_field_name=rfn,
+                )
+            )
+            this_fn = self._get_completion_function(
+                profile_key=profile_key,
+                stream=stream,
+                kwargs=completion_kwargs,
+            )
+            return CustomStreamHandler(
+                response,
+                to_str=to_str,
+                hook=profile.stream_hook,
+                called_by=this_fn,
+            )
+
+    @staticmethod
+    def _chunk_to_str(
+        chunk: ChatCompletionChunk, reasoning_field_name: str
+    ) -> DeltaStr:
         cd = chunk.choices[0].delta
 
         # For reasoning models.
-        if hasattr(cd, self.reasoning_field_name):
-            if (c := getattr(cd, self.reasoning_field_name)) is not None:
+        if hasattr(cd, reasoning_field_name):
+            if (c := getattr(cd, reasoning_field_name)) is not None:
                 assert isinstance(c, str)
                 return ReasoningContentStr(c)
 
@@ -162,3 +271,46 @@ class APIWrapper:
             return ContentStr(cd.content)
         else:
             return ContentStr()
+
+    @staticmethod
+    def _merge_payloads(
+        fst: ExtraPayloadContents, snd: ExtraPayloadContents
+    ) -> ExtraPayloadContents:
+        # Use bool(NotGiven()) == False
+        return {  # pyright: ignore [reportReturnType]
+            k: v_fst or v_snd
+            for ((k, v_fst), v_snd) in zip(fst.items(), snd.values())
+        }
+
+    @overload
+    def _get_completion_function(
+        self,
+        profile_key: str,
+        stream: Literal[False],
+        kwargs: ExtraPayloadContents,
+    ) -> Callable[[str], CustomResponseStr]: ...
+
+    @overload
+    def _get_completion_function(
+        self,
+        profile_key: str,
+        stream: Literal[True],
+        kwargs: ExtraPayloadContents,
+    ) -> Callable[[str], Generator[ChatCompletionChunk]]: ...
+
+    def _get_completion_function(
+        self, profile_key: str, stream: bool, kwargs: ExtraPayloadContents
+    ) -> CompletionFn[ChatCompletionChunk]:
+        def _completion(
+            user_prompt: str,
+        ) -> CustomResponseStr | Generator[ChatCompletionChunk]:
+            r = self.completion(
+                profile_key, user_prompt, stream=stream, **kwargs
+            )
+
+            if isinstance(r, CustomResponseStr):
+                return r
+            else:
+                return r._generator
+
+        return _completion

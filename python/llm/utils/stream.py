@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
+from abc import ABC
 from dataclasses import dataclass
 from functools import update_wrapper
 from typing import (
     Callable,
+    Generator,
     Generic,
+    Iterable,
     Iterator,
     Self,
     TypeAlias,
     TypeVar,
+    reveal_type,
 )
+from itertools import chain
 
 from openai import Stream
 
@@ -24,6 +29,13 @@ class ContentStr(str):
 
 
 DeltaStr: TypeAlias = ReasoningContentStr | ContentStr
+"""
+Type alias for string deltas in streamed responses.
+
+Can represent either:
+- :class:`ReasoningContentStr` (reasoning segments)
+- :class:`ContentStr` (regular content segments)
+"""
 
 
 class CustomResponseStr(str):
@@ -88,21 +100,54 @@ class CustomResponseStr(str):
         return self.__add__(other)
 
 
+CompletionFn: TypeAlias = Callable[[str], CustomResponseStr | Generator[T]]
+
+
 @dataclass
 class CustomStreamHookArgs(Generic[T]):
+    """
+    Container for stream processing arguments.
+
+    Attributes:
+        called_by: The function this was called by.
+        head: Most recent chunk from stream.
+        chunks: All accumulated chunks.
+        head_as_str: String representation of head chunk.
+        text: Aggregated response content.
+    """
+
+    called_by: CompletionFn[T]
     head: T
     chunks: list[T]
     head_as_str: DeltaStr
     text: CustomResponseStr
 
 
-# For readability.
 CustomChunkToStrFnType: TypeAlias = Callable[[T], DeltaStr]
+"""
+Type alias for chunk conversion functions.
+
+Signature:
+    ``(chunk: T) -> DeltaStr``
+"""
+
 CustomStreamHookFnType: TypeAlias = Callable[[CustomStreamHookArgs[T]], None]
+"""
+Type alias for stream hook functions.
+
+Signature:
+    ``(args: CustomStreamHookArgs[T]) -> None``
+"""
 
 
 class CustomChunkToStr(Generic[T]):
-    """A typed decorator for chunk conversion."""
+    """
+    Decorator for chunk-to-string conversion functions.
+
+    Usage:
+        @CustomChunkToStr
+        def my_converter(chunk: T) -> DeltaStr: ...
+    """
 
     def __init__(self, fn: CustomChunkToStrFnType[T]) -> None:
         self.to_str = fn
@@ -113,24 +158,27 @@ class CustomChunkToStr(Generic[T]):
 
 
 class CustomStreamHook(Generic[T]):
-    """A typed decorator for stream hooks."""
+    def __init__(self, *funcs: CustomStreamHookFnType[T]) -> None:
+        self.hooks = funcs
 
-    def __init__(self, fn: CustomStreamHookFnType[T]) -> None:
-        self.hook = fn
-        update_wrapper(self, fn)
+    def __call__(
+        self, args: CustomStreamHookArgs[T]
+    ) -> Iterable[Generator[T] | None]:
+        return (hook(args) for hook in self.hooks)
 
-    def __call__(self, args: CustomStreamHookArgs[T]) -> None:
-        self.hook(args)
+    def __or__(self, other: 'CustomStreamHook[T]') -> 'CustomStreamHook[T]':
+        return CustomStreamHook(*self.hooks, *other.hooks)
 
 
 @CustomChunkToStr
 def to_str_not_implemented(_) -> DeltaStr:
+    """Default chunk converter (returns empty `ContentStr`)."""
     return ContentStr()
 
 
 @CustomStreamHook
 def no_hook(_: CustomStreamHookArgs[T]) -> None:
-    pass
+    """Default no-op stream hook."""
 
 
 class CustomStreamHandler(Iterator[T]):
@@ -139,11 +187,13 @@ class CustomStreamHandler(Iterator[T]):
         stream: Stream[T],
         to_str: CustomChunkToStr[T] = to_str_not_implemented,
         hook: CustomStreamHook[T] = no_hook,
+        called_by: CompletionFn[T] = lambda _: CustomResponseStr(),
     ) -> None:
         self.stream = stream
         self.to_str = to_str
         self.hook = hook
-        self._iterator = (chunk for chunk in stream)
+        self.called_by = called_by
+        self._generator = (chunk for chunk in stream)
 
         self.head: T | None = None
         self.chunks: list[T] = []
@@ -153,18 +203,30 @@ class CustomStreamHandler(Iterator[T]):
         self.response = self.stream.response
 
     def __next__(self) -> T:
-        chunk = next(self._iterator)
+        chunk = next(self._generator)
 
         self.head = chunk
         self.chunks += [self.head]
-        head_as_str = self.to_str(self.head)
-        self.text += head_as_str
+        self.text += (head_as_str := self.to_str(self.head))
 
-        self.hook(
-            CustomStreamHookArgs(self.head, self.chunks, head_as_str, self.text)
+        # TODO: Allow hooks to extend (replace) the _generator.
+        possible_extensions = self.hook(
+            CustomStreamHookArgs(
+                self.called_by, self.head, self.chunks, head_as_str, self.text
+            )
         )
+
+        for extn in (extn for extn in possible_extensions if extn is not None):
+            # Extend the generator.
+            self._generator = chain(self._generator, extn)
 
         return chunk
 
     def close(self) -> None:
+        """Closes the underlying stream."""
         return self.stream.close()
+
+    def exhaust(self) -> CustomResponseStr:
+        """Exhaust the iterator."""
+        _ = tuple(_ for _ in self)
+        return self.text

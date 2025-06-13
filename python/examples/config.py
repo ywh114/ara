@@ -103,6 +103,10 @@ class ExampleDISettings(DISettings[ExampleISettings]):
 
 @dataclass
 class ExampleGSettings(GSettings):
+    # [api]
+    api_example_api_key_env_var: str
+    api_example_api_endpoint: str
+    api_example_api_model: str
     # [database]
     database_embedding_model_name: str
     database_embedding_model_type: str
@@ -141,6 +145,10 @@ class ExampleGSettings(GSettings):
 #   )
 @dataclass
 class ExampleDGSettings(DGSettings[ExampleGSettings]):
+    # [api]
+    api_example_api_key_env_var: str = 'DEEPSEEK_API_KEY'
+    api_example_api_endpoint: str = 'https://api.deepseek.com'
+    api_example_api_model: str = 'deepseek-reasoner'
     # [database]
     database_embedding_model_name: str = 'Qwen/Qwen3-Embedding-0.6B'
     database_embedding_model_type: str = 'SentenceTransformer'

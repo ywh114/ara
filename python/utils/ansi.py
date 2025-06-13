@@ -25,6 +25,7 @@ __all__ = [
     'NOBOLD',
     'RESET',
     'CLEAR',
+    'END',
 ]
 
 BLACK = '\033[30m'
@@ -58,3 +59,5 @@ NOBOLD = '\033[21m'
 
 RESET = '\033[39m\033[49m'
 CLEAR = '\033[2K'
+
+END = '\033[0m'
