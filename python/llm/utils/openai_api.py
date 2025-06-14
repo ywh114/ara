@@ -14,20 +14,20 @@ from typing import (
     override,
 )
 
-from openai.types.chat.chat_completion_message_tool_call import Function
-
-
+from llm.utils.context_manager import MultiroundContextManager
 from llm.utils.stream import (
     CalledByFnType,
     ContentStr,
+    CustomCaptureFinish,
     CustomChunkToStr,
-    CustomFinishHook,
+    CustomToolHook,
     CustomResponseStr,
     CustomStreamHandler,
     CustomStreamHook,
     DeltaStr,
     ReasoningContentStr,
-    no_finish_hook,
+    no_capture,
+    no_tool_hook,
     no_stream_hook,
 )
 from openai import NotGiven, OpenAI, Stream
@@ -39,8 +39,8 @@ from openai.types.chat import (
     ChatCompletionToolChoiceOptionParam,
     ChatCompletionToolParam,
 )
+from openai.types.chat.chat_completion_message_tool_call import Function
 from openai.types.chat.completion_create_params import ResponseFormat
-
 from utils.logger import get_logger
 
 FinishReason: TypeAlias = Literal[
@@ -89,8 +89,9 @@ class LLMProfile:
         base_url: str,
         model: str,
         system_prompt: str,
+        capture_finish: CustomCaptureFinish = no_capture,
         stream_hook: CustomStreamHook = no_stream_hook,
-        finish_hook: CustomFinishHook = no_finish_hook,
+        tool_hook: CustomToolHook = no_tool_hook,
         completion_kwargs: ExtraPayloadContents | None = None,
         openai_kwargs: dict[str, Any] | None = None,
         reasoning_field_name: str = 'reasoning_content',
@@ -100,8 +101,9 @@ class LLMProfile:
         )
         self.model = model
         self.system_prompt = system_prompt
+        self.capture_finish = capture_finish
         self.stream_hook = stream_hook
-        self.finish_hook = finish_hook
+        self.tool_hook = tool_hook
         self.reasoning_field_name = reasoning_field_name
 
         self.completion_kwargs = (
@@ -129,7 +131,7 @@ class LLMWrapper(dict[str, LLMProfile]):
     def completion(
         self,
         profile_key: str,
-        user_prompt: str,
+        context_manager: MultiroundContextManager,
         /,
         stream: Literal[False],
         *,
@@ -154,7 +156,7 @@ class LLMWrapper(dict[str, LLMProfile]):
     def completion(
         self,
         profile_key: str,
-        user_prompt: str,
+        context_manager: MultiroundContextManager,
         /,
         stream: Literal[True],
         *,
@@ -179,7 +181,7 @@ class LLMWrapper(dict[str, LLMProfile]):
     def completion(
         self,
         profile_key: str,
-        user_prompt: str,
+        context_manager: MultiroundContextManager,
         /,
         stream: bool = False,
         *,
@@ -214,6 +216,8 @@ class LLMWrapper(dict[str, LLMProfile]):
             'logprobs': logprobs or NotGiven(),
         }
 
+        self.context_manager = context_manager
+
         completion_kwargs = self._merge_payloads(
             instance_completion_kwargs, profile.completion_kwargs
         )
@@ -223,9 +227,11 @@ class LLMWrapper(dict[str, LLMProfile]):
         )
         response = profile.client.chat.completions.create(
             model=profile.model,
+            # TODO: Use context manager
+            # TODO: Support tools
             messages=[
                 {'role': 'system', 'content': profile.system_prompt},
-                {'role': 'user', 'content': user_prompt},
+                *context_manager.tolist(),
             ],
             stream=stream,
             **completion_kwargs,
@@ -261,8 +267,11 @@ class LLMWrapper(dict[str, LLMProfile]):
             return CustomStreamHandler(
                 response,
                 to_str=to_str,
+                capture_finish=profile.capture_finish,
                 stream_hook=profile.stream_hook,
+                tool_hook=profile.tool_hook,
                 called_by=this_fn,
+                context_manager=self.context_manager,
             )
 
     @staticmethod
@@ -298,7 +307,9 @@ class LLMWrapper(dict[str, LLMProfile]):
         profile_key: str,
         stream: Literal[False],
         kwargs: ExtraPayloadContents,
-    ) -> Callable[[str, dict[str, Any] | None], CustomResponseStr]: ...
+    ) -> Callable[
+        [MultiroundContextManager, dict[str, Any] | None], CustomResponseStr
+    ]: ...
 
     @overload
     def _get_completion_function(
@@ -307,14 +318,15 @@ class LLMWrapper(dict[str, LLMProfile]):
         stream: Literal[True],
         kwargs: ExtraPayloadContents,
     ) -> Callable[
-        [str, dict[str, Any] | None], Iterator[ChatCompletionChunk]
+        [MultiroundContextManager, dict[str, Any] | None],
+        Iterator[ChatCompletionChunk],
     ]: ...
 
     def _get_completion_function(
         self, profile_key: str, stream: bool, kwargs: ExtraPayloadContents
     ) -> CalledByFnType[ChatCompletionChunk]:
         def _completion(
-            user_prompt: str,
+            context_manager: MultiroundContextManager,
             mask_kwargs: dict[str, Any] | None = None,
         ) -> CustomResponseStr | Iterator[ChatCompletionChunk]:
             # FIXME: Make this merge safe.
@@ -323,7 +335,7 @@ class LLMWrapper(dict[str, LLMProfile]):
             # NOTE: Allow overriding settings.
             r = self.completion(
                 profile_key,
-                user_prompt,
+                context_manager,
                 stream=stream,
                 **merged,
             )
@@ -338,7 +350,7 @@ class LLMWrapper(dict[str, LLMProfile]):
 
 def find_last_tool(
     chunks: Iterable[ChatCompletionChunk],
-) -> Any:  # ChatCompletionMessageToolCall | None:
+) -> ChatCompletionMessageToolCall | None:
     deltas = [c.choices[0].delta for c in chunks]
 
     last_tool_start_index = len(deltas) - 1

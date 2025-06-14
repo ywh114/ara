@@ -6,7 +6,6 @@ from typing import (
     Any,
     Callable,
     Generic,
-    Iterable,
     Iterator,
     Literal,
     Self,
@@ -15,9 +14,11 @@ from typing import (
 )
 
 from httpx import Response
+from llm.utils.context_manager import MultiroundContextManager
 from openai import Stream
 
 T = TypeVar('T')
+U = TypeVar('U')
 
 
 class ReasoningContentStr(str):
@@ -55,8 +56,8 @@ class CustomResponseStr(str):
         cls,
         value: str = '',
         reasoning_content: str = '',
-        tool_blurb_content: str = '',
         content: str = '',
+        tool_blurbs: str = '',
         content_with_tool_blurbs: str = '',
     ) -> Self:
         """Create a new ResponseStr instance.
@@ -69,7 +70,7 @@ class CustomResponseStr(str):
         instance = super().__new__(cls, value)
         instance.reasoning_content = ReasoningContentStr(reasoning_content)
         instance.content = ContentStr(content)
-        instance.tool_blurbs = ToolBlurbStr(tool_blurb_content)
+        instance.tool_blurbs = ToolBlurbStr(tool_blurbs)
         instance.content_with_tool_blurbs = content_with_tool_blurbs
         return instance
 
@@ -82,7 +83,13 @@ class CustomResponseStr(str):
         :return: New instance with concatenated values.
         """
         new_str = super().__add__(other)
-        updated = self.__class__(new_str, self.reasoning_content, self.content)
+        updated = self.__class__(
+            new_str,
+            self.reasoning_content,
+            self.content,
+            self.tool_blurbs,
+            self.content_with_tool_blurbs,
+        )
 
         if isinstance(other, self.__class__):
             updated.reasoning_content = ReasoningContentStr(
@@ -121,12 +128,13 @@ class CustomResponseStr(str):
 
 
 CalledByFnType: TypeAlias = Callable[
-    [str, dict[str, Any] | None], CustomResponseStr | Iterator[T]
+    [MultiroundContextManager, dict[str, Any] | None],
+    CustomResponseStr | Iterator[T],
 ]
 
 
 @dataclass
-class CustomHookArgs(Generic[T]):
+class CustomHookArgs(Generic[T, U]):
     """
     Container for stream processing arguments.
 
@@ -139,6 +147,7 @@ class CustomHookArgs(Generic[T]):
     """
 
     called_by: CalledByFnType[T]
+    context_manager: MultiroundContextManager[U]
     head: T
     chunks: list[T]
     head_as_str: DeltaStr
@@ -154,7 +163,7 @@ Signature:
     `(chunk: T) -> DeltaStr`
 """
 
-CustomStreamHookFnType: TypeAlias = Callable[[CustomHookArgs[T]], None]
+CustomStreamHookFnType: TypeAlias = Callable[[CustomHookArgs[T, U]], None]
 """
 Type alias for stream hook functions.
 
@@ -162,16 +171,18 @@ Signature:
     `(cha: CustomHookArgs[T]) -> None`
 """
 
-ToolCallChainer: TypeAlias = tuple[ToolBlurbStr, Iterator[T]]
 
-CustomFinishHookFnType: TypeAlias = Callable[
-    [CustomHookArgs[T]], ToolCallChainer[T] | None
+ToolCallChainExtension: TypeAlias = tuple[ToolBlurbStr, Iterator[T]]
+ToolCallExtension: TypeAlias = tuple[ToolBlurbStr, CustomResponseStr]
+
+CustomToolHookFnType: TypeAlias = Callable[
+    [CustomHookArgs[T, U]], ToolCallExtension | ToolCallChainExtension[T] | None
 ]
 """
-Type alias for finish hook functions. Can extend via tool calls.
+Type alias for tool hook functions. Can extend via tool calls.
 
 Signature:
-    `(cha: CustomHookArgs[T]) -> ToolCallChainer[T] | None`
+    `(cha: CustomHookArgs[T]) -> ToolCallChainExtension[T] | None`
 """
 
 CustomCaptureFinishFnType: TypeAlias = Callable[[T], bool]
@@ -200,26 +211,37 @@ class CustomChunkToStr(Generic[T]):
         return self.to_str(chunk)
 
 
-class CustomStreamHook(Generic[T]):
-    def __init__(self, *fns: CustomStreamHookFnType[T]) -> None:
+class CustomStreamHook(Generic[T, U]):
+    def __init__(self, *fns: CustomStreamHookFnType[T, U]) -> None:
         self.hooks = fns
 
-    def __call__(self, args: CustomHookArgs[T]) -> None:
+    def __call__(self, args: CustomHookArgs[T, U]) -> None:
         for hook in self.hooks:
             hook(args)
 
-    def __or__(self, other: 'CustomStreamHook[T]') -> 'CustomStreamHook[T]':
+    def __or__(
+        self, other: 'CustomStreamHook[T, U]'
+    ) -> 'CustomStreamHook[T, U]':
         return CustomStreamHook(*self.hooks, *other.hooks)
 
 
-class CustomFinishHook(Generic[T]):
-    def __init__(self, *fns: CustomFinishHookFnType[T]) -> None:
+# TODO: Use wrapper to store the blurb.
+# TODO: If above implemented, change the rest of the decorators for consistency.
+class CustomToolHook(Generic[T, U]):
+    def __init__(self, *fns: CustomToolHookFnType[T, U]) -> None:
         self.hooks = fns
 
     def __call__(
-        self, args: CustomHookArgs
-    ) -> Iterable[ToolCallChainer[T] | None]:
-        return (hook(args) for hook in self.hooks)
+        self, args: CustomHookArgs[T, U]
+    ) -> ToolCallExtension | ToolCallChainExtension[T] | None:
+        for ret in (hook(args) for hook in self.hooks):
+            if ret is not None:
+                return ret
+        else:
+            return None
+
+    def __or__(self, other: 'CustomToolHook[T, U]') -> 'CustomToolHook[T, U]':
+        return CustomToolHook(*self.hooks, *other.hooks)
 
 
 class CustomCaptureFinish(Generic[T]):
@@ -238,12 +260,12 @@ def to_str_not_implemented(_) -> DeltaStr:
 
 
 @CustomStreamHook
-def no_stream_hook(_: CustomHookArgs[T]) -> None:
+def no_stream_hook(_: CustomHookArgs[T, U]) -> None:
     """Default no-op stream hook."""
 
 
-@CustomFinishHook
-def no_finish_hook(_: CustomHookArgs[T]) -> None:
+@CustomToolHook
+def no_tool_hook(_: CustomHookArgs[T, U]) -> None:
     """Default no-op stream hook."""
 
 
@@ -257,36 +279,34 @@ class CustomStreamHandler(Iterator[T]):
     def __init__(
         self,
         stream: Stream[T],
+        context_manager: MultiroundContextManager[U],
         to_str: CustomChunkToStr[T] = to_str_not_implemented,
         capture_finish: CustomCaptureFinish[T] = no_capture,
-        stream_hook: CustomStreamHook[T] = no_stream_hook,
-        finish_hook: CustomFinishHook[T] = no_finish_hook,
+        stream_hook: CustomStreamHook[T, U] = no_stream_hook,
+        tool_hook: CustomToolHook[T, U] = no_tool_hook,
         called_by: CalledByFnType[T] = lambda *_: iter(()),
     ) -> None:
-        # Not cleared.
         self.stream = stream
+        self.context_manager = context_manager
         self.to_str = to_str
         self.capture_finish = capture_finish
         self.stream_hook = stream_hook
-        self.finish_hook = finish_hook
+        self.tool_hook = tool_hook
         self.called_by = called_by
         self._iterator = (chunk for chunk in stream)
 
-        # Destroyed on clear.
         self.head: T | None = None
-        self.chunks: list[T] = []
+        self.chunks: list[T] = []  # Destroyed on clear.
+
         self.head_as_str: DeltaStr = ContentStr()
         self.text: CustomResponseStr = CustomResponseStr()
-        self.stream_finished: bool = False
+
+        self.stream_finished: bool = False  # Reset on clear.
         self.http_response: Response = self.stream.response
 
     def _clear(self) -> None:
-        self.head: T | None = None
-        self.chunks: list[T] = []
-        self.head_as_str: DeltaStr = ContentStr()
-        self.text: CustomResponseStr = CustomResponseStr()
-        self.stream_finished: bool = False
-        self.http_response: Response = self.stream.response
+        self.chunks = []
+        self.stream_finished = False
 
     def __next__(self) -> T:
         chunk = next(self._iterator)
@@ -300,6 +320,7 @@ class CustomStreamHandler(Iterator[T]):
 
         ha = CustomHookArgs(
             called_by=self.called_by,
+            context_manager=self.context_manager,
             head=self.head,
             chunks=self.chunks,
             head_as_str=self.head_as_str,
@@ -312,12 +333,13 @@ class CustomStreamHandler(Iterator[T]):
 
         if self.stream_finished:
             # Run finish hooks.
-            for reason, extn in (
-                a2 for a2 in self.finish_hook(ha) if a2 is not None
-            ):
+            if (ret := self.tool_hook(ha)) is not None:
+                reason, extn = ret
                 if reason is not None and extn is not None:
+                    assert isinstance(extn, Iterator)  # Always true.
                     self.text += reason
                     self._iterator = chain(self._iterator, extn)
+                    self._clear()
 
         return chunk
 

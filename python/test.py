@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 from pprint import pprint as pp
 import os
+from typing import reveal_type
 
 from openai import OpenAI
+from openai.types.chat import ChatCompletionMessageToolCall
 
 
 def send_messages(messages):
@@ -48,7 +50,12 @@ print(f'User>\t {messages[0]["content"]}')
 
 print(f'Model>\t {message.content}')
 
-tool = message.tool_calls[0]
+tool: ChatCompletionMessageToolCall = message.tool_calls[0]
+
+reveal_type(message)
+reveal_type(tool)
+print(dir(tool))
+
 print(type(tool))
 messages.append(
     {
@@ -61,7 +68,9 @@ messages.append(
 messages.append({'role': 'tool', 'tool_call_id': tool.id, 'content': '24℃'})
 message = send_messages(messages)
 print(f'Model>\t {message.content}')
+reveal_type(message)
 
 print('-------------')
 
 pp(messages)
+reveal_type(messages)
