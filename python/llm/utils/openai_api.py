@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-# TODO: Write ConversationManager for multiround.
+# TODO: Write ConversationManager for single multiround.
 # TODO: Add conversations to db.
 from functools import partial
 from typing import (
     Any,
     Callable,
-    Generator,
     Iterable,
+    Iterator,
     Literal,
     TypeAlias,
     TypedDict,
@@ -14,34 +14,42 @@ from typing import (
     override,
 )
 
+from openai.types.chat.chat_completion_message_tool_call import Function
+
+
 from llm.utils.stream import (
-    CompletionFn,
+    CalledByFnType,
     ContentStr,
     CustomChunkToStr,
+    CustomFinishHook,
     CustomResponseStr,
     CustomStreamHandler,
     CustomStreamHook,
     DeltaStr,
     ReasoningContentStr,
-    no_hook,
+    no_finish_hook,
+    no_stream_hook,
 )
 from openai import NotGiven, OpenAI, Stream
 from openai.types.chat import (
     ChatCompletion,
     ChatCompletionChunk,
+    ChatCompletionMessageToolCall,
     ChatCompletionStreamOptionsParam,
     ChatCompletionToolChoiceOptionParam,
     ChatCompletionToolParam,
 )
 from openai.types.chat.completion_create_params import ResponseFormat
 
-from python.utils.logger import get_logger
+from utils.logger import get_logger
 
 FinishReason: TypeAlias = Literal[
     'stop', 'length', 'tool_calls', 'content_filter', 'function_call'
 ]
 
 logger = get_logger(__name__)
+
+ChatCompletionToolParams: TypeAlias = Iterable[ChatCompletionToolParam]
 
 
 class ExtraPayloadContents(TypedDict):
@@ -53,7 +61,7 @@ class ExtraPayloadContents(TypedDict):
     stream_options: ChatCompletionStreamOptionsParam | NotGiven
     temperature: float | NotGiven
     top_p: int | NotGiven
-    tools: Iterable[ChatCompletionToolParam] | NotGiven
+    tools: ChatCompletionToolParams | NotGiven
     tool_choice: ChatCompletionToolChoiceOptionParam | NotGiven
     logprobs: bool | NotGiven
 
@@ -75,14 +83,14 @@ class LLMProfile:
         'logprobs': NotGiven(),
     }
 
-    # TODO: Unify hook for both stream and non-stream.
     def __init__(
         self,
         api_key: str,
         base_url: str,
         model: str,
         system_prompt: str,
-        stream_hook: CustomStreamHook = no_hook,
+        stream_hook: CustomStreamHook = no_stream_hook,
+        finish_hook: CustomFinishHook = no_finish_hook,
         completion_kwargs: ExtraPayloadContents | None = None,
         openai_kwargs: dict[str, Any] | None = None,
         reasoning_field_name: str = 'reasoning_content',
@@ -93,6 +101,7 @@ class LLMProfile:
         self.model = model
         self.system_prompt = system_prompt
         self.stream_hook = stream_hook
+        self.finish_hook = finish_hook
         self.reasoning_field_name = reasoning_field_name
 
         self.completion_kwargs = (
@@ -166,6 +175,7 @@ class LLMWrapper(dict[str, LLMProfile]):
         logprobs: bool | NotGiven | None = None,
     ) -> CustomStreamHandler[ChatCompletionChunk]: ...
 
+    # TODO: Use finish_hook to extend stream=False
     def completion(
         self,
         profile_key: str,
@@ -251,7 +261,7 @@ class LLMWrapper(dict[str, LLMProfile]):
             return CustomStreamHandler(
                 response,
                 to_str=to_str,
-                hook=profile.stream_hook,
+                stream_hook=profile.stream_hook,
                 called_by=this_fn,
             )
 
@@ -288,7 +298,7 @@ class LLMWrapper(dict[str, LLMProfile]):
         profile_key: str,
         stream: Literal[False],
         kwargs: ExtraPayloadContents,
-    ) -> Callable[[str], CustomResponseStr]: ...
+    ) -> Callable[[str, dict[str, Any] | None], CustomResponseStr]: ...
 
     @overload
     def _get_completion_function(
@@ -296,21 +306,74 @@ class LLMWrapper(dict[str, LLMProfile]):
         profile_key: str,
         stream: Literal[True],
         kwargs: ExtraPayloadContents,
-    ) -> Callable[[str], Generator[ChatCompletionChunk]]: ...
+    ) -> Callable[
+        [str, dict[str, Any] | None], Iterator[ChatCompletionChunk]
+    ]: ...
 
     def _get_completion_function(
         self, profile_key: str, stream: bool, kwargs: ExtraPayloadContents
-    ) -> CompletionFn[ChatCompletionChunk]:
+    ) -> CalledByFnType[ChatCompletionChunk]:
         def _completion(
             user_prompt: str,
-        ) -> CustomResponseStr | Generator[ChatCompletionChunk]:
+            mask_kwargs: dict[str, Any] | None = None,
+        ) -> CustomResponseStr | Iterator[ChatCompletionChunk]:
+            # FIXME: Make this merge safe.
+            assert 'stream' not in (mask_kwargs or {})  # FIXME: Replace.
+            merged: ExtraPayloadContents = kwargs | (mask_kwargs or {})  # pyright: ignore [reportAssignmentType]
+            # NOTE: Allow overriding settings.
             r = self.completion(
-                profile_key, user_prompt, stream=stream, **kwargs
+                profile_key,
+                user_prompt,
+                stream=stream,
+                **merged,
             )
 
             if isinstance(r, CustomResponseStr):
                 return r
             else:
-                return r._generator
+                return r._iterator
 
         return _completion
+
+
+def find_last_tool(
+    chunks: Iterable[ChatCompletionChunk],
+) -> Any:  # ChatCompletionMessageToolCall | None:
+    deltas = [c.choices[0].delta for c in chunks]
+
+    last_tool_start_index = len(deltas) - 1
+    for delta in reversed(deltas):
+        if (
+            (tc := delta.tool_calls) is not None
+            and len(tc) > 0
+            and (tool_id := tc[0].id) is not None
+            and ((partial_fn := tc[0].function) is not None)
+            and ((tool_function_name := partial_fn.name) is not None)
+            and (tool_type := tc[0].type) is not None
+        ):
+            the_tool_id = tool_id
+            the_tool_function_name = tool_function_name
+            the_tool_type = tool_type
+            break
+        last_tool_start_index -= 1
+    else:
+        return None
+
+    concat_function_arguments = ''
+    for delta in deltas[last_tool_start_index:]:
+        if (
+            (tc := delta.tool_calls) is not None
+            and len(tc) > 0
+            and (delta_fn := tc[0].function) is not None
+        ):
+            concat_function_arguments += delta_fn.arguments or ''
+
+    the_function = Function(
+        arguments=concat_function_arguments,
+        name=the_tool_function_name,
+    )
+    return ChatCompletionMessageToolCall(
+        id=the_tool_id,
+        function=the_function,
+        type=the_tool_type,
+    )

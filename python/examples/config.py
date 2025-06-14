@@ -148,7 +148,7 @@ class ExampleDGSettings(DGSettings[ExampleGSettings]):
     # [api]
     api_example_api_key_env_var: str = 'DEEPSEEK_API_KEY'
     api_example_api_endpoint: str = 'https://api.deepseek.com'
-    api_example_api_model: str = 'deepseek-reasoner'
+    api_example_api_model: str = 'deepseek-chat'
     # [database]
     database_embedding_model_name: str = 'Qwen/Qwen3-Embedding-0.6B'
     database_embedding_model_type: str = 'SentenceTransformer'
