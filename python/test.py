@@ -65,7 +65,13 @@ messages.append(
     }
 )
 
-messages.append({'role': 'tool', 'tool_call_id': tool.id, 'content': '24℃'})
+messages.append(
+    {
+        'role': 'tool',
+        'tool_call_id': tool.id,
+        'content': '24℃',
+    }
+)
 message = send_messages(messages)
 print(f'Model>\t {message.content}')
 reveal_type(message)

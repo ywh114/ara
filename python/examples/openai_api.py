@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
-from datetime import datetime
 import os
-from typing import Any
+from datetime import datetime
+from typing import Any, Callable, TypeAlias, TypeVar
 
-from llm.utils.context_manager import MultiroundContextManager
+from llm.utils.context_manager import Context, MultiroundContextManager
 from llm.utils.openai_api import (
     ChatCompletionToolParams,
     LLMProfile,
     LLMWrapper,
-    find_last_tool,
 )
 from llm.utils.stream import (
     CustomCaptureFinish,
     CustomHookArgs,
-    CustomStreamHandler,
     CustomStreamHook,
     CustomToolHook,
     ToolBlurbStr,
     ToolCallChainExtension,
     ToolCallExtension,
 )
-from openai.types.chat import ChatCompletionChunk
+from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageToolCall
 from openai.types.shared_params.function_definition import FunctionDefinition
+from utils import timestamp
 from utils.logger import get_logger
 
 from examples.config import confh
+from examples.card import cardh
 
 logger = get_logger(__name__)
 
@@ -35,58 +35,44 @@ def print_each_word_hook(ha: CustomHookArgs) -> None:
 
 
 @CustomStreamHook
-def contradiction_hook(ha: CustomHookArgs) -> None:
-    head = ha.head_as_str
-    if 'contradict' in head.lower():
-        logger.critical('CONTRADICTION MENTIONED!')
+def cat_hook(ha: CustomHookArgs) -> None:
+    if '喵' in ha.head_as_str.lower():
+        logger.critical('(ฅ´ω`ฅ)')
 
 
-@CustomToolHook
-def get_weather_hook(
-    ha: CustomHookArgs[ChatCompletionChunk, Any],
-) -> ToolCallExtension | ToolCallChainExtension[ChatCompletionChunk] | None:
-    fn_name = 'get_weather'
-    blurb = ToolBlurbStr(f'[used function `{fn_name}`]')
+T = TypeVar('T')
 
-    cm = ha.context_manager
-    tool = find_last_tool(ha.chunks)
-
-    if tool is None or tool.function.name != fn_name:
-        return None
-
-    with MultiroundContextManager(tmp_from=cm) as cm:
-        cm.assistant_message(ha.text, [tool])
-        cm.tool_message(
-            content='It is 24 degrees Celcius.', tool_call_id=tool.id
-        )
-
-        completion = ha.called_by(cm, None)
-
-        # XXX: This is nessecary
-        if isinstance(completion, str):
-            return blurb, completion
-        else:
-            return blurb, completion
+CustomToolHookContentsFn: TypeAlias = Callable[
+    [CustomHookArgs[ChatCompletionChunk, Any]], str
+]
 
 
-@CustomToolHook
-def get_time_hook(
-    ha: CustomHookArgs[ChatCompletionChunk, Any],
-) -> ToolCallExtension | ToolCallChainExtension[ChatCompletionChunk] | None:
-    fn_name = 'get_time'
-    blurb = ToolBlurbStr(f'[used function `{fn_name}`]')
+def create_tool_hook(
+    fn_name: str, tool_hook_contents_fn: CustomToolHookContentsFn
+) -> CustomToolHook[ChatCompletionChunk, Any, ChatCompletionMessageToolCall]:
+    blurb = ToolBlurbStr(
+        f'<SYSTEM - AUTOMATICALLY INJECTED - DO NOT IMITATE: used {fn_name}>'
+    )
 
-    cm = ha.context_manager
-    tool = find_last_tool(ha.chunks)
+    @CustomToolHook
+    def custom_tool_hook(
+        ha: CustomHookArgs[ChatCompletionChunk, Any],
+        _tools: list[ChatCompletionMessageToolCall],
+    ) -> ToolCallExtension | ToolCallChainExtension[ChatCompletionChunk] | None:
+        cm = ha.context_manager
 
-    if tool is None or tool.function.name != fn_name:
-        return None
+        tools = tuple(tool for tool in _tools if tool.function.name == fn_name)
 
-    with MultiroundContextManager(tmp_from=cm) as cm:
-        cm.assistant_message(ha.text, [tool])
-        cm.tool_message(
-            content=f'It is {datetime.now()}.', tool_call_id=tool.id
-        )
+        if not tools:
+            return None
+
+        assert len(tools) == 1
+        tool = tools[0]
+
+        content = tool_hook_contents_fn(ha)
+
+        cm.assistant_message(ha.text.content_with_reasoning, [tool])
+        cm.tool_message(content=content, tool_call_id=tool.id)
 
         completion = ha.called_by(cm, None)
 
@@ -95,6 +81,17 @@ def get_time_hook(
             return blurb, completion
         else:
             return blurb, completion
+
+    return custom_tool_hook
+
+
+get_weather_hook = create_tool_hook(
+    'get_weather', lambda _: 'It is 32 degrees Celcius.'
+)
+
+get_time_hook = create_tool_hook(
+    'get_time', lambda _: f'It is {datetime.now()}.'
+)
 
 
 @CustomCaptureFinish
@@ -109,76 +106,94 @@ example_profile = LLMProfile(
     confh.games.api_example_api_endpoint,
     model=confh.games.api_example_api_model,
     capture_finish=capture_finish,
-    system_prompt='You are a helpful assistant.\n'
-    'NOTE: Tool call outputs are destroyed on the next tool call. '
-    'Please take whatever nessecary before invoking another tool, whether by.'
-    'immediately answering the question, or repeating the contents so they are '
-    'available in context. This is intentional to limit cache size. ',
-    stream_hook=print_each_word_hook | contradiction_hook,
+    system_prompt=f"""Write your next reply from {{user}}'s point of view. Write how you think {{user}} would reply based on {{user}}'s previous messages. Avoid writing as the character(s) or Narrator.
+
+Today is {timestamp.month_name} {timestamp.day_name}, {timestamp.year}. It is {timestamp.day_of_week_name}. 
+""".format(user=cardh.get_field('name')),
+    stream_hook=print_each_word_hook | cat_hook,
     tool_hook=get_weather_hook | get_time_hook,
 )
 
 llm['example'] = example_profile
 
+get_weather: FunctionDefinition = {
+    'name': 'get_weather',
+    'description': 'Get weather of an location, the user shoud supply a location first',
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'location': {
+                'type': 'string',
+                'description': 'The location, e.g. San Francisco, CA, USA.',
+            }
+        },
+        'required': ['location'],
+    },
+}
+get_time: FunctionDefinition = {
+    'name': 'get_time',
+    'description': 'Get the current time of a location',
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'location': {
+                'type': 'string',
+                'description': 'The location, e.g. San Francisco, CA, USA.',
+            }
+        },
+        'required': ['location'],
+    },
+}
+tools: ChatCompletionToolParams = [
+    {
+        'type': 'function',
+        'function': get_weather,
+    },
+    {'type': 'function', 'function': get_time},
+]
+
+injected_context: Context = [
+    {'role': 'user', 'content': 'Please provide your `name`.'},
+    {'role': 'assistant', 'content': cardh.get_field('name')},
+    {'role': 'user', 'content': 'Please provide your `summary`.'},
+    {'role': 'assistant', 'content': cardh.get_field('summary')},
+    {'role': 'user', 'content': 'Please provide your `personality`.'},
+    {'role': 'assistant', 'content': cardh.get_field('personality')},
+    {'role': 'user', 'content': 'Please provide your `scenario`.'},
+    {'role': 'assistant', 'content': cardh.get_field('scenario')},
+    {
+        'role': 'user',
+        'content': 'Please provide your `greeting_message` field.',
+    },
+    {'role': 'assistant', 'content': cardh.get_field('greeting_message')},
+    {
+        'role': 'user',
+        'content': 'Please provide your `example_messages` field.',
+    },
+    {'role': 'assistant', 'content': cardh.get_field('example_messages')},
+]
+
 
 def example_completion(
     llm: LLMWrapper,
-) -> CustomStreamHandler[ChatCompletionChunk]:
-    get_weather: FunctionDefinition = {
-        'name': 'get_weather',
-        'description': 'Get weather of an location, the user shoud supply a location first',
-        'parameters': {
-            'type': 'object',
-            'properties': {
-                'location': {
-                    'type': 'string',
-                    'description': 'The city and state, e.g. San Francisco, CA',
-                }
-            },
-            'required': ['location'],
-        },
-    }
-    get_time: FunctionDefinition = {
-        'name': 'get_time',
-        'description': 'Get the current time of a location',
-        'parameters': {
-            'type': 'object',
-            'properties': {
-                'location': {
-                    'type': 'string',
-                    'description': 'The city and state, e.g. San Francisco, CA',
-                }
-            },
-            'required': ['location'],
-        },
-    }
-    tools: ChatCompletionToolParams = [
-        {
-            'type': 'function',
-            'function': get_weather,
-        },
-        {'type': 'function', 'function': get_time},
-    ]
+) -> None:
+    context_manager = MultiroundContextManager(injected_context)
+    user_prompt = ''
+    while user_prompt != 'exit':
+        user_prompt = input('User> ')
+        context_manager.user_message(user_prompt)
+        with MultiroundContextManager(tmp_from=context_manager) as cm:
+            completion = llm.completion(
+                'example',
+                cm,
+                stream=True,
+                tools=tools,
+            )
 
-    with MultiroundContextManager() as cm:
-        completion = llm.completion(
-            'example',
-            cm.user_message(
-                'What happens when \\sqrt{D} is in the base field in Galois theory?\n'
-                "What's he weather in Hangzhou?\n"
-                "What's the time in Hangzhou?\n"
-                'Do the tool calling limitations in the system prompt make sense?'
-            ),
-            stream=True,
-            tools=tools,
+        context_manager.assistant_message(
+            completion.exhaust().content_with_tool_blurbs, tool_calls=[]
         )
-
-    text = completion.exhaust()
-
-    logger.debug(f'Reasoning:\n{text.reasoning_content}')
-    logger.info(f'Content:\n{text.content_with_tool_blurbs}')
-
-    return completion
+        print()
 
 
 if __name__ == '__main__':

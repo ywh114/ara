@@ -8,7 +8,7 @@ from examples.config import confh, example_assets
 
 logger = get_logger(__name__)
 
-example_card = 'example_card.png'
+example_card = '柴郡.png'
 cardh = CardHolder.load_png(
     uuid4(),
     path=confh.insts.cache_assets_dir.joinpath(example_card),

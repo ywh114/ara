@@ -25,6 +25,7 @@ from llm.utils.stream import (
     CustomStreamHandler,
     CustomStreamHook,
     DeltaStr,
+    GetToolsFnType,
     ReasoningContentStr,
     no_capture,
     no_tool_hook,
@@ -266,12 +267,13 @@ class LLMWrapper(dict[str, LLMProfile]):
             )
             return CustomStreamHandler(
                 response,
+                context_manager=self.context_manager,
                 to_str=to_str,
                 capture_finish=profile.capture_finish,
                 stream_hook=profile.stream_hook,
                 tool_hook=profile.tool_hook,
                 called_by=this_fn,
-                context_manager=self.context_manager,
+                get_tools=find_all_tools,
             )
 
     @staticmethod
@@ -348,9 +350,28 @@ class LLMWrapper(dict[str, LLMProfile]):
         return _completion
 
 
+@overload
 def find_last_tool(
     chunks: Iterable[ChatCompletionChunk],
-) -> ChatCompletionMessageToolCall | None:
+    nonu: Literal[False],
+) -> tuple[ChatCompletionMessageToolCall, int] | None: ...
+
+
+@overload
+def find_last_tool(
+    chunks: Iterable[ChatCompletionChunk],
+    nonu: Literal[True],
+) -> ChatCompletionMessageToolCall | None: ...
+
+
+def find_last_tool(
+    chunks: Iterable[ChatCompletionChunk],
+    nonu: bool = True,
+) -> (
+    tuple[ChatCompletionMessageToolCall, int]
+    | ChatCompletionMessageToolCall
+    | None
+):
     deltas = [c.choices[0].delta for c in chunks]
 
     last_tool_start_index = len(deltas) - 1
@@ -384,8 +405,23 @@ def find_last_tool(
         arguments=concat_function_arguments,
         name=the_tool_function_name,
     )
-    return ChatCompletionMessageToolCall(
+
+    ccmtc = ChatCompletionMessageToolCall(
         id=the_tool_id,
         function=the_function,
         type=the_tool_type,
     )
+
+    return ccmtc if nonu else ccmtc, last_tool_start_index
+
+
+# find_all_tools: GetToolsFnType
+def find_all_tools(
+    chunks: list[ChatCompletionChunk],
+) -> list[ChatCompletionMessageToolCall]:
+    tools, n = [], len(chunks)
+    while (lc := find_last_tool(chunks[:n], False)) is not None:
+        tool, n = lc
+        tools += [tool]
+
+    return tools

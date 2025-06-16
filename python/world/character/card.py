@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from enum import StrEnum, auto
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Literal, Self, TypeAlias
 from uuid import UUID
 
 import aichar
@@ -32,24 +32,14 @@ class CardFormat(StrEnum):
     DEFAULT = SILLYTAVERN
 
 
-class CardField(StrEnum):
-    """
-    Character card data fields accessible through :class:`CardHolder`.
-
-    :cvar NAME: Character's name field
-    :cvar SUMMARY: Character summary field
-    :cvar PERSONALITY: Personality traits field
-    :cvar SCENARIO: Scenario context field
-    :cvar GREETING_MESSAGE: Initial greeting message field
-    :cvar EXAMPLE_MESSAGES: Example conversation messages field
-    """
-
-    NAME = auto()
-    SUMMARY = auto()
-    PERSONALITY = auto()
-    SCENARIO = auto()
-    GREETING_MESSAGE = auto()
-    EXAMPLE_MESSAGES = auto()
+CardField: TypeAlias = (
+    Literal['name']
+    | Literal['summary']
+    | Literal['personality']
+    | Literal['scenario']
+    | Literal['greeting_message']
+    | Literal['example_messages']
+)
 
 
 @dataclass

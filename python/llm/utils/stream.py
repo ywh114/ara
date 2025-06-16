@@ -19,6 +19,7 @@ from openai import Stream
 
 T = TypeVar('T')
 U = TypeVar('U')
+V = TypeVar('V')
 
 
 class ReasoningContentStr(str):
@@ -39,6 +40,7 @@ Type alias for string deltas in streamed responses.
 """
 
 
+# TODO: Improve. Remove redundancy.
 class CustomResponseStr(str):
     """
     A string subclass with additional attributes for reasoning and content.
@@ -50,6 +52,7 @@ class CustomResponseStr(str):
     reasoning_content: ReasoningContentStr
     tool_blurbs: ToolBlurbStr
     content: ContentStr
+    content_with_reasoning: str
     content_with_tool_blurbs: str
 
     def __new__(
@@ -58,6 +61,7 @@ class CustomResponseStr(str):
         reasoning_content: str = '',
         content: str = '',
         tool_blurbs: str = '',
+        content_with_reasoning: str = '',
         content_with_tool_blurbs: str = '',
     ) -> Self:
         """Create a new ResponseStr instance.
@@ -71,6 +75,7 @@ class CustomResponseStr(str):
         instance.reasoning_content = ReasoningContentStr(reasoning_content)
         instance.content = ContentStr(content)
         instance.tool_blurbs = ToolBlurbStr(tool_blurbs)
+        instance.content_with_reasoning = content_with_reasoning
         instance.content_with_tool_blurbs = content_with_tool_blurbs
         return instance
 
@@ -88,6 +93,7 @@ class CustomResponseStr(str):
             self.reasoning_content,
             self.content,
             self.tool_blurbs,
+            self.content_with_reasoning,
             self.content_with_tool_blurbs,
         )
 
@@ -99,6 +105,9 @@ class CustomResponseStr(str):
             updated.tool_blurbs = ToolBlurbStr(
                 updated.tool_blurbs + other.tool_blurbs
             )
+            updated.content_with_reasoning = (
+                updated.reasoning_content + updated.content
+            )
             updated.content_with_tool_blurbs = (
                 updated.content_with_tool_blurbs
                 + other.content_with_tool_blurbs
@@ -107,11 +116,13 @@ class CustomResponseStr(str):
             updated.reasoning_content = ReasoningContentStr(
                 updated.reasoning_content + other
             )
+            updated.content_with_reasoning += other
         elif isinstance(other, ToolBlurbStr):
             updated.tool_blurbs = ToolBlurbStr(updated.tool_blurbs + other)
             updated.content_with_tool_blurbs += other
         elif isinstance(other, (ContentStr, str)):  # Catch other `str`.
             updated.content = ContentStr(updated.content + other)
+            updated.content_with_reasoning += other
             updated.content_with_tool_blurbs += other
 
         return updated
@@ -131,6 +142,8 @@ CalledByFnType: TypeAlias = Callable[
     [MultiroundContextManager, dict[str, Any] | None],
     CustomResponseStr | Iterator[T],
 ]
+
+GetToolsFnType: TypeAlias = Callable[[list[T]], list[V]]
 
 
 @dataclass
@@ -176,7 +189,8 @@ ToolCallChainExtension: TypeAlias = tuple[ToolBlurbStr, Iterator[T]]
 ToolCallExtension: TypeAlias = tuple[ToolBlurbStr, CustomResponseStr]
 
 CustomToolHookFnType: TypeAlias = Callable[
-    [CustomHookArgs[T, U]], ToolCallExtension | ToolCallChainExtension[T] | None
+    [CustomHookArgs[T, U], list[V]],
+    ToolCallExtension | ToolCallChainExtension[T] | None,
 ]
 """
 Type alias for tool hook functions. Can extend via tool calls.
@@ -211,6 +225,10 @@ class CustomChunkToStr(Generic[T]):
         return self.to_str(chunk)
 
 
+# XXX: Wrappers are currently useless. Probably could be used to avoid redundant
+# operations.
+
+
 class CustomStreamHook(Generic[T, U]):
     def __init__(self, *fns: CustomStreamHookFnType[T, U]) -> None:
         self.hooks = fns
@@ -225,22 +243,22 @@ class CustomStreamHook(Generic[T, U]):
         return CustomStreamHook(*self.hooks, *other.hooks)
 
 
-# TODO: Use wrapper to store the blurb.
-# TODO: If above implemented, change the rest of the decorators for consistency.
-class CustomToolHook(Generic[T, U]):
-    def __init__(self, *fns: CustomToolHookFnType[T, U]) -> None:
+class CustomToolHook(Generic[T, U, V]):
+    def __init__(self, *fns: CustomToolHookFnType[T, U, V]) -> None:
         self.hooks = fns
 
     def __call__(
-        self, args: CustomHookArgs[T, U]
+        self, ha: CustomHookArgs[T, U], tools: list[V]
     ) -> ToolCallExtension | ToolCallChainExtension[T] | None:
-        for ret in (hook(args) for hook in self.hooks):
+        for ret in (hook(ha, tools) for hook in self.hooks):
             if ret is not None:
                 return ret
         else:
             return None
 
-    def __or__(self, other: 'CustomToolHook[T, U]') -> 'CustomToolHook[T, U]':
+    def __or__(
+        self, other: 'CustomToolHook[T, U, V]'
+    ) -> 'CustomToolHook[T, U, V]':
         return CustomToolHook(*self.hooks, *other.hooks)
 
 
@@ -265,7 +283,7 @@ def no_stream_hook(_: CustomHookArgs[T, U]) -> None:
 
 
 @CustomToolHook
-def no_tool_hook(_: CustomHookArgs[T, U]) -> None:
+def no_tool_hook(*_) -> None:
     """Default no-op stream hook."""
 
 
@@ -283,8 +301,9 @@ class CustomStreamHandler(Iterator[T]):
         to_str: CustomChunkToStr[T] = to_str_not_implemented,
         capture_finish: CustomCaptureFinish[T] = no_capture,
         stream_hook: CustomStreamHook[T, U] = no_stream_hook,
-        tool_hook: CustomToolHook[T, U] = no_tool_hook,
+        tool_hook: CustomToolHook[T, U, V] = no_tool_hook,
         called_by: CalledByFnType[T] = lambda *_: iter(()),
+        get_tools: GetToolsFnType[T, V] = lambda *_: [],
     ) -> None:
         self.stream = stream
         self.context_manager = context_manager
@@ -293,6 +312,7 @@ class CustomStreamHandler(Iterator[T]):
         self.stream_hook = stream_hook
         self.tool_hook = tool_hook
         self.called_by = called_by
+        self.get_tools = get_tools
         self._iterator = (chunk for chunk in stream)
 
         self.head: T | None = None
@@ -332,8 +352,9 @@ class CustomStreamHandler(Iterator[T]):
         self.stream_hook(ha)
 
         if self.stream_finished:
+            tools = self.get_tools(self.chunks)
             # Run finish hooks.
-            if (ret := self.tool_hook(ha)) is not None:
+            if (ret := self.tool_hook(ha, tools)) is not None:
                 reason, extn = ret
                 if reason is not None and extn is not None:
                     assert isinstance(extn, Iterator)  # Always true.
