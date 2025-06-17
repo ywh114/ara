@@ -12,9 +12,9 @@ from chromadb import (
 )
 from chromadb.api.types import Document
 from chromadb.utils import embedding_functions as ef
-from config.config import ConfigHolder, GameConfig, InstallationConfig
-from config.structure import GameSettings, InstallationSettings
-from llm.reranker import (
+from configuration.config import ConfigHolder, GameConfig, InstallationConfig
+from configuration.structure import GameSettings, InstallationSettings
+from llm.utils.reranker import (
     CustomHuggingFace4Qwen3RerankerFunction,
     CustomHuggingFaceRerankerFunction,
 )

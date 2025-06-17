@@ -88,7 +88,6 @@ KSSExtender: TypeAlias = KSearchSpecExtender
 KASExtender: TypeAlias = KAddSpecExtender
 
 
-# TODO: Integrate timestamp.
 @dataclass
 class KSpecBase(ABC, Generic[V]):
     """
@@ -97,7 +96,6 @@ class KSpecBase(ABC, Generic[V]):
     Validates extender fields during initialization.
 
     :ivar handles: List of unique identifiers for extended specifications.
-    :ivar _timestamp: Creation timestamp of the specification.
     """
 
     handles: list[Any]
@@ -115,7 +113,6 @@ class KSpecBase(ABC, Generic[V]):
                 f'Extra {self._get_x()} field(s) for {self.__class__}: '
                 f'{tuple(d[:-1] for d in delta)}'
             )
-        self._timestamp: datetime = datetime.now()
 
     @classmethod
     @abstractmethod
@@ -205,7 +202,6 @@ class KAddSpec(KSpecBase[KAddSpecExtender]):
         return cls([], [], [], [])
 
 
-# TODO: Rewrite
 @dataclass
 class KSearchSpec(KSpecBase[KSearchSpecExtender]):
     """

@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+# TODO: Add Character to __init__.py
+from dataclasses import dataclass
+from typing import Self
+from uuid import UUID
+
+from world.character.card import CardHolder
+from world.character.memory import Memory
+from llm.utils.context_manager import Context
+from utils.bars import BarManager
+from world.importance import ImportanceEnum
+
+
+@dataclass
+class Character:
+    id: UUID
+    cardh: CardHolder
+    memory: Memory[Self]
+    bars: BarManager
+    capabilities: list[str]  # "tools" that do not result in tool calls.
+    importance: ImportanceEnum
+
+    @property
+    def name(self) -> str:
+        return self.cardh.get_field('name')
+
+    @property
+    def whoami(self) -> Context:
+        # XXX: To be inserted directly without processing.
+        name = self.cardh.get_field('name')
+        return [
+            {
+                'role': 'user',
+                'content': '<System>: Please provide your `name`.',
+                'name': 'System',
+            },
+            {
+                'role': 'assistant',
+                'content': f'<{name}>: {name}',
+                'name': name,
+            },
+            {
+                'role': 'user',
+                'content': '<System>: Please provide your `summary`.',
+                'name': 'System',
+            },
+            {
+                'role': 'assistant',
+                'content': f'<{name}>: {self.cardh.get_field("summary")}',
+                'name': name,
+            },
+            {
+                'role': 'user',
+                'content': '<System>: Please provide your `personality`.',
+                'name': 'System',
+            },
+            {
+                'role': 'assistant',
+                'content': f'<{name}>: {self.cardh.get_field("personality")}',
+                'name': name,
+            },
+            {
+                'role': 'user',
+                'content': '<System>: Please provide your `scenario`.',
+                'name': 'System',
+            },
+            {
+                'role': 'assistant',
+                'content': f'<{name}>: {self.cardh.get_field("scenario")}',
+                'name': name,
+            },
+            {
+                'role': 'user',
+                'content': '<System>: Please provide your `greeting_message`.',
+                'name': 'System',
+            },
+            {
+                'role': 'assistant',
+                'content': f'<{name}>: {self.cardh.get_field("greeting_message")}',
+                'name': name,
+            },
+            {
+                'role': 'user',
+                'content': '<System>: Please provide your `example_messages`.',
+                'name': 'System',
+            },
+            {
+                'role': 'assistant',
+                'content': f'<{name}>: {self.cardh.get_field("example_messages")}',
+                'name': name,
+            },
+        ]
+
+    @property
+    def scratch(self) -> Context:
+        return [
+            {
+                'role': 'user',
+                'content': 'Please provide your `scratch`.',
+                'name': 'System',
+            },
+            {
+                'role': 'assistant',
+                'content': self.memory.scratch,
+                'name': self.cardh.get_field('name'),
+            },
+        ]

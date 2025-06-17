@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Flag, auto
 from functools import reduce, wraps
 from operator import or_
@@ -572,7 +572,7 @@ class BarManager:
     :ivar bars: The bars.
     """
 
-    bars: list[Bar]
+    bars: list[Bar] = field(default_factory=list)
 
     def get_bar_by_id(self, _id: UUID) -> Bar | None:
         """

@@ -9,10 +9,11 @@ isplit = 1
 
 
 # Define a custom Importance class for task priorities
-class TaskPriority(Importance, isplit=isplit):
-    LOW = imauto()
-    MEDIUM = imauto()
-    HIGH = imauto()
+class CharacterImportance(Importance, isplit=isplit):
+    ANONYMOUS = imauto()
+    IMPORTANT = imauto()
+    REQUIRED = imauto()
+    EIGEN = imauto()
 
 
 # Simulate task prioritization
@@ -20,11 +21,11 @@ def demo_importance():
     logger.info(f'Start importance example (isplit={isplit})')
 
     # Create task priorities
-    low_priority = TaskPriority.LOW
-    medium_priority = TaskPriority.MEDIUM
-    high_priority = TaskPriority.HIGH
-    level1_priority = TaskPriority.ILevel(1.0)
-    level2_priority = TaskPriority.ILevel(2.0)
+    low_priority = CharacterImportance.ANONYMOUS
+    medium_priority = CharacterImportance.IMPORTANT
+    high_priority = CharacterImportance.REQUIRED
+    level1_priority = CharacterImportance.ILevel(1.0)
+    level2_priority = CharacterImportance.ILevel(2.0)
 
     # logger.info priorities
     logger.info(f'Low Priority: {low_priority}')
@@ -48,15 +49,15 @@ def demo_importance():
 
     # Type checking
     logger.info(
-        f'\nisinstance({TaskPriority},\n\t   {ImportanceType}): '
-        f'{isinstance(TaskPriority, ImportanceType)}'
+        f'\nisinstance({CharacterImportance},\n\t   {ImportanceType}): '
+        f'{isinstance(CharacterImportance, ImportanceType)}'
     )
     logger.info(
-        f'isinstance({low_priority},\n\t   {TaskPriority}): '
+        f'isinstance({low_priority},\n\t   {CharacterImportance}): '
         f'{isinstance(low_priority, Importance)}',
     )
     logger.info(
-        f'isinstance({level1_priority},\n\t   {TaskPriority}): '
+        f'isinstance({level1_priority},\n\t   {CharacterImportance}): '
         f'{isinstance(level1_priority, Importance)}'
     )
 

@@ -20,14 +20,13 @@ from llm.utils.stream import (
     ContentStr,
     CustomCaptureFinish,
     CustomChunkToStr,
+    CustomHookArgs,
     CustomToolHook,
     CustomResponseStr,
     CustomStreamHandler,
     CustomStreamHook,
     DeltaStr,
-    GetToolsFnType,
     ReasoningContentStr,
-    no_capture,
     no_tool_hook,
     no_stream_hook,
 )
@@ -35,6 +34,7 @@ from openai import NotGiven, OpenAI, Stream
 from openai.types.chat import (
     ChatCompletion,
     ChatCompletionChunk,
+    ChatCompletionMessage,
     ChatCompletionMessageToolCall,
     ChatCompletionStreamOptionsParam,
     ChatCompletionToolChoiceOptionParam,
@@ -44,13 +44,19 @@ from openai.types.chat.chat_completion_message_tool_call import Function
 from openai.types.chat.completion_create_params import ResponseFormat
 from utils.logger import get_logger
 
+logger = get_logger(__name__)
+
 FinishReason: TypeAlias = Literal[
     'stop', 'length', 'tool_calls', 'content_filter', 'function_call'
 ]
 
-logger = get_logger(__name__)
-
 ChatCompletionToolParams: TypeAlias = Iterable[ChatCompletionToolParam]
+
+
+@CustomCaptureFinish
+def capture_finish(chunk: ChatCompletionChunk) -> bool:
+    # TODO: Handle refusals/connection errors.
+    return bool(chunk.choices[0].finish_reason)
 
 
 class ExtraPayloadContents(TypedDict):
@@ -67,36 +73,67 @@ class ExtraPayloadContents(TypedDict):
     logprobs: bool | NotGiven
 
 
+_completion_kwargs_default: ExtraPayloadContents = {
+    'frequency_penalty': NotGiven(),
+    'max_tokens': NotGiven(),
+    'presence_penalty': NotGiven(),
+    'response_format': NotGiven(),
+    'stop': NotGiven(),
+    'stream_options': NotGiven(),
+    'temperature': NotGiven(),
+    'top_p': NotGiven(),
+    'tools': NotGiven(),
+    'tool_choice': NotGiven(),
+    'logprobs': NotGiven(),
+}
+
+
+def _payload_from_partial(
+    part: dict[str, Any] | ExtraPayloadContents | None = None,
+    orig: ExtraPayloadContents = _completion_kwargs_default,
+) -> ExtraPayloadContents:
+    if part is None:
+        part = {}
+    return {
+        'frequency_penalty': part.setdefault('frequency_penalty', NotGiven())
+        or orig['frequency_penalty'],
+        'max_tokens': part.setdefault('max_tokens', NotGiven())
+        or orig['max_tokens'],
+        'presence_penalty': part.setdefault('presence_penalty', NotGiven())
+        or orig['presence_penalty'],
+        'response_format': part.setdefault('response_format', NotGiven())
+        or orig['response_format'],
+        'stop': part.setdefault('stop', NotGiven()) or orig['stop'],
+        'stream_options': part.setdefault('stream_options', NotGiven())
+        or orig['stream_options'],
+        'temperature': part.setdefault('temperature', NotGiven())
+        or orig['temperature'],
+        'top_p': part.setdefault('top_p', NotGiven()) or orig['top_p'],
+        'tools': part.setdefault('tools', NotGiven()) or orig['tools'],
+        'tool_choice': part.setdefault('tool_choice', NotGiven())
+        or orig['tool_choice'],
+        'logprobs': part.setdefault('logprobs', NotGiven()) or orig['logprobs'],
+    }
+
+
 class LLMProfile:
     """Profile for OpenAI-style API."""
 
-    _completion_kwargs_default: ExtraPayloadContents = {
-        'frequency_penalty': NotGiven(),
-        'max_tokens': NotGiven(),
-        'presence_penalty': NotGiven(),
-        'response_format': NotGiven(),
-        'stop': NotGiven(),
-        'stream_options': NotGiven(),
-        'temperature': NotGiven(),
-        'top_p': NotGiven(),
-        'tools': NotGiven(),
-        'tool_choice': NotGiven(),
-        'logprobs': NotGiven(),
-    }
-
     def __init__(
         self,
+        key: str,
         api_key: str,
         base_url: str,
         model: str,
         system_prompt: str,
-        capture_finish: CustomCaptureFinish = no_capture,
+        capture_finish: CustomCaptureFinish = capture_finish,
         stream_hook: CustomStreamHook = no_stream_hook,
         tool_hook: CustomToolHook = no_tool_hook,
-        completion_kwargs: ExtraPayloadContents | None = None,
+        completion_kwargs: dict[str, Any] | None = None,
         openai_kwargs: dict[str, Any] | None = None,
         reasoning_field_name: str = 'reasoning_content',
     ) -> None:
+        self.key = key
         self.client = OpenAI(
             api_key=api_key, base_url=base_url, **(openai_kwargs or {})
         )
@@ -107,14 +144,12 @@ class LLMProfile:
         self.tool_hook = tool_hook
         self.reasoning_field_name = reasoning_field_name
 
-        self.completion_kwargs = (
-            completion_kwargs or self._completion_kwargs_default
-        )
+        self.completion_kwargs = _payload_from_partial(completion_kwargs)
 
 
 class LLMWrapper(dict[str, LLMProfile]):
-    def __init__(self, profiles: dict[str, LLMProfile] | None = None) -> None:
-        self.profiles = profiles or {}
+    def __init__(self, *profiles: LLMProfile) -> None:
+        self.profiles = {profile.key: profile for profile in profiles}
 
     @override
     def __setitem__(self, key: str, profile: LLMProfile, /) -> None:
@@ -151,6 +186,7 @@ class LLMWrapper(dict[str, LLMProfile]):
         | NotGiven
         | None = None,
         logprobs: bool | NotGiven | None = None,
+        specific_tool_hook: CustomToolHook | NotGiven | None = None,
     ) -> CustomResponseStr: ...
 
     @overload
@@ -176,9 +212,11 @@ class LLMWrapper(dict[str, LLMProfile]):
         | NotGiven
         | None = None,
         logprobs: bool | NotGiven | None = None,
+        specific_tool_hook: CustomToolHook  # TODO: Generics
+        | NotGiven
+        | None = None,
     ) -> CustomStreamHandler[ChatCompletionChunk]: ...
 
-    # TODO: Use finish_hook to extend stream=False
     def completion(
         self,
         profile_key: str,
@@ -201,6 +239,7 @@ class LLMWrapper(dict[str, LLMProfile]):
         | NotGiven
         | None = None,
         logprobs: bool | NotGiven | None = None,
+        specific_tool_hook: CustomToolHook | NotGiven | None = None,
     ) -> str | CustomStreamHandler[ChatCompletionChunk]:
         profile = self.profiles[profile_key]
         instance_completion_kwargs: ExtraPayloadContents = {
@@ -219,7 +258,7 @@ class LLMWrapper(dict[str, LLMProfile]):
 
         self.context_manager = context_manager
 
-        completion_kwargs = self._merge_payloads(
+        completion_kwargs = _payload_from_partial(
             instance_completion_kwargs, profile.completion_kwargs
         )
 
@@ -228,8 +267,6 @@ class LLMWrapper(dict[str, LLMProfile]):
         )
         response = profile.client.chat.completions.create(
             model=profile.model,
-            # TODO: Use context manager
-            # TODO: Support tools
             messages=[
                 {'role': 'system', 'content': profile.system_prompt},
                 *context_manager.tolist(),
@@ -238,11 +275,16 @@ class LLMWrapper(dict[str, LLMProfile]):
             **completion_kwargs,
         )
 
+        tool_hook = (
+            profile.tool_hook
+            if not specific_tool_hook
+            else profile.tool_hook | specific_tool_hook
+        )
         rfn = profile.reasoning_field_name
         if not stream:
             assert isinstance(response, ChatCompletion)
             cm = response.choices[0].message
-            return (
+            response_str = (
                 CustomResponseStr()
                 + (
                     ReasoningContentStr()
@@ -251,6 +293,35 @@ class LLMWrapper(dict[str, LLMProfile]):
                 )
                 + ContentStr(cm.content)
             )
+
+            found_tools = find_all_tools(response.choices[0].message)
+            if found_tools:
+                message = response.choices[0].message
+                this_fn = self._get_completion_function(
+                    profile_key=profile_key,
+                    stream=stream,
+                    kwargs=completion_kwargs,
+                )
+                args = CustomHookArgs(
+                    called_by=this_fn,
+                    context_manager=self.context_manager,
+                    head=None,
+                    chunks=[],
+                    head_as_str=ContentStr(),
+                    text=response_str,
+                    message=message,
+                    tools=found_tools,
+                    finished=True,
+                )
+                if (ret := tool_hook(args)) is not None:
+                    reason, extn = ret
+                    if reason is not None and extn is not None:
+                        assert isinstance(extn, CustomResponseStr)
+                        # TODO: Rewrite overrides.
+                        response_str += reason
+                        response_str += extn
+
+            return response_str
 
         else:
             assert isinstance(response, Stream)
@@ -271,7 +342,7 @@ class LLMWrapper(dict[str, LLMProfile]):
                 to_str=to_str,
                 capture_finish=profile.capture_finish,
                 stream_hook=profile.stream_hook,
-                tool_hook=profile.tool_hook,
+                tool_hook=tool_hook,
                 called_by=this_fn,
                 get_tools=find_all_tools,
             )
@@ -292,16 +363,6 @@ class LLMWrapper(dict[str, LLMProfile]):
             return ContentStr(cd.content)
         else:
             return ContentStr()
-
-    @staticmethod
-    def _merge_payloads(
-        fst: ExtraPayloadContents, snd: ExtraPayloadContents
-    ) -> ExtraPayloadContents:
-        # Use bool(NotGiven()) == False
-        return {  # pyright: ignore [reportReturnType]
-            k: v_fst or v_snd
-            for ((k, v_fst), v_snd) in zip(fst.items(), snd.values())
-        }
 
     @overload
     def _get_completion_function(
@@ -327,27 +388,27 @@ class LLMWrapper(dict[str, LLMProfile]):
     def _get_completion_function(
         self, profile_key: str, stream: bool, kwargs: ExtraPayloadContents
     ) -> CalledByFnType[ChatCompletionChunk]:
-        def _completion(
+        def _completion_function(
             context_manager: MultiroundContextManager,
-            mask_kwargs: dict[str, Any] | None = None,
+            _mask_kwargs: dict[str, Any] | None = None,
         ) -> CustomResponseStr | Iterator[ChatCompletionChunk]:
-            # FIXME: Make this merge safe.
-            assert 'stream' not in (mask_kwargs or {})  # FIXME: Replace.
-            merged: ExtraPayloadContents = kwargs | (mask_kwargs or {})  # pyright: ignore [reportAssignmentType]
-            # NOTE: Allow overriding settings.
-            r = self.completion(
+            if 'stream' in (mask_kwargs := _mask_kwargs or {}):
+                raise RuntimeError('Do not pass `stream`.')
+
+            # Allow temporary settings override.
+            completion = self.completion(
                 profile_key,
                 context_manager,
                 stream=stream,
-                **merged,
+                **_payload_from_partial(mask_kwargs, kwargs),
             )
 
-            if isinstance(r, CustomResponseStr):
-                return r
+            if isinstance(completion, CustomResponseStr):
+                return completion
             else:
-                return r._iterator
+                return completion._iterator
 
-        return _completion
+        return _completion_function
 
 
 @overload
@@ -417,11 +478,14 @@ def find_last_tool(
 
 # find_all_tools: GetToolsFnType
 def find_all_tools(
-    chunks: list[ChatCompletionChunk],
+    chunks: list[ChatCompletionChunk] | ChatCompletionMessage,
 ) -> list[ChatCompletionMessageToolCall]:
-    tools, n = [], len(chunks)
-    while (lc := find_last_tool(chunks[:n], False)) is not None:
-        tool, n = lc
-        tools += [tool]
+    if isinstance(chunks, list):
+        tools, n = [], len(chunks)
+        while (lc := find_last_tool(chunks[:n], False)) is not None:
+            tool, n = lc
+            tools += [tool]
+    else:
+        tools = chunks.tool_calls or []
 
     return tools
