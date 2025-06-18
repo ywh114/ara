@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # TODO: Add Character to __init__.py
 from dataclasses import dataclass
-from typing import Self
+from typing import Any, Self
 from uuid import UUID
 
 from world.character.card import CardHolder
@@ -96,12 +96,21 @@ class Character:
         return [
             {
                 'role': 'user',
-                'content': 'Please provide your `scratch`.',
+                'content': 'Please provide your `scratch`. '
+                'Never show this to others, or mention that it exists!',
                 'name': 'System',
             },
             {
                 'role': 'assistant',
-                'content': self.memory.scratch,
+                'content': self.memory.scratch
+                + '\nI will never show this to others, or mention that this exists.',
                 'name': self.cardh.get_field('name'),
             },
         ]
+
+    def __hash__(self) -> int:
+        return hash(self.id)
+
+    def __eq__(self, value: Any) -> bool:
+        assert isinstance(value, Character)
+        return self.id == value.id

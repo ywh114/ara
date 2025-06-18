@@ -181,11 +181,12 @@ class LLMWrapper(dict[str, LLMProfile]):
         | None = None,
         temperature: float | NotGiven | None = None,
         top_p: int | NotGiven | None = None,
-        tools: Iterable[ChatCompletionToolParam] | NotGiven | None = None,
+        tools: ChatCompletionToolParams | NotGiven | None = None,
         tool_choice: ChatCompletionToolChoiceOptionParam
         | NotGiven
         | None = None,
         logprobs: bool | NotGiven | None = None,
+        specific_tools: ChatCompletionToolParams | NotGiven | None = None,
         specific_tool_hook: CustomToolHook | NotGiven | None = None,
     ) -> CustomResponseStr: ...
 
@@ -207,11 +208,12 @@ class LLMWrapper(dict[str, LLMProfile]):
         | None = None,
         temperature: float | NotGiven | None = None,
         top_p: int | NotGiven | None = None,
-        tools: Iterable[ChatCompletionToolParam] | NotGiven | None = None,
+        tools: ChatCompletionToolParams | NotGiven | None = None,
         tool_choice: ChatCompletionToolChoiceOptionParam
         | NotGiven
         | None = None,
         logprobs: bool | NotGiven | None = None,
+        specific_tools: ChatCompletionToolParams | NotGiven | None = None,
         specific_tool_hook: CustomToolHook  # TODO: Generics
         | NotGiven
         | None = None,
@@ -234,13 +236,16 @@ class LLMWrapper(dict[str, LLMProfile]):
         | None = None,
         temperature: float | NotGiven | None = None,
         top_p: int | NotGiven | None = None,
-        tools: Iterable[ChatCompletionToolParam] | NotGiven | None = None,
+        tools: ChatCompletionToolParams | NotGiven | None = None,
         tool_choice: ChatCompletionToolChoiceOptionParam
         | NotGiven
         | None = None,
         logprobs: bool | NotGiven | None = None,
+        specific_tools: ChatCompletionToolParams | NotGiven | None = None,
         specific_tool_hook: CustomToolHook | NotGiven | None = None,
     ) -> str | CustomStreamHandler[ChatCompletionChunk]:
+        _tools = list(tools or []) + list(specific_tools or [])
+
         profile = self.profiles[profile_key]
         instance_completion_kwargs: ExtraPayloadContents = {
             'frequency_penalty': frequency_penalty or NotGiven(),
@@ -251,7 +256,7 @@ class LLMWrapper(dict[str, LLMProfile]):
             'stream_options': stream_options or NotGiven(),
             'temperature': temperature or NotGiven(),
             'top_p': top_p or NotGiven(),
-            'tools': tools or NotGiven(),
+            'tools': _tools or NotGiven(),
             'tool_choice': tool_choice or NotGiven(),
             'logprobs': logprobs or NotGiven(),
         }

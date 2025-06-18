@@ -76,7 +76,10 @@ class GameLLM(LLMWrapper, Generic[T]):
 
     @classmethod
     def create_tool_hook(
-        cls, name: str, tool_hook_contents_fn: CustomToolHookContentsFn[T]
+        cls,
+        name: str,
+        tool_hook_contents_fn: CustomToolHookContentsFn[T],
+        end: bool = False,
     ) -> CustomToolHook[
         ChatCompletionChunk,
         T,
@@ -115,6 +118,9 @@ class GameLLM(LLMWrapper, Generic[T]):
             logger.debug(f'Used tool {name}.')
 
             content = tool_hook_contents_fn(args, tool.function.arguments)
+
+            if end:
+                return None
 
             cm.assistant_message(
                 args.text.content_with_reasoning,

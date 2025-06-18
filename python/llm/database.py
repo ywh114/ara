@@ -9,6 +9,8 @@ from chromadb import (
     Metadatas,
     PersistentClient,
     QueryResult,
+    Where,
+    WhereDocument,
 )
 from chromadb.api.types import Document
 from chromadb.utils import embedding_functions as ef
@@ -38,8 +40,8 @@ class DatabaseProvider(ABC):
         domain_name: str,
         query_texts: list[str],
         n_results: int,
-        where: dict | None,
-        where_document: dict | None,
+        where: Where | None,
+        where_document: WhereDocument | None,
         ids: IDs | None,
         instruct_task: str = '',
         rerank_task: str = '',
@@ -77,6 +79,14 @@ class DatabaseProvider(ABC):
         :param documents: Documents to add.
         :param metadatas: Metadata for each document.
         :param ids: Unique IDs for each document.
+        """
+
+    @abstractmethod
+    def touch(self, domain_name: str) -> None:
+        """
+        Touch a collection.
+
+        :param domain_name: Target collection name.
         """
 
 
@@ -262,8 +272,8 @@ class Chroma(DatabaseProvider):
         domain_name: str,
         query_texts: list[str],
         n_results: int,
-        where: dict | None,
-        where_document: dict | None,
+        where: Where | None,
+        where_document: WhereDocument | None,
         ids: IDs | None,
         instruct_task: str = '',
         rerank_task: str = '',
@@ -288,9 +298,7 @@ class Chroma(DatabaseProvider):
         logger.debug(
             f'{self}: search on {domain_name} with size {len(query_texts)}.'
         )
-        collection = self.client.get_collection(
-            domain_name, embedding_function=self.model
-        )
+        collection = self.client.get_collection(domain_name)
 
         query_result = collection.query(
             query_texts=self.format_embedding_instructs(
@@ -323,20 +331,25 @@ class Chroma(DatabaseProvider):
                 def _transpose(r: Iterable[tuple[Any, Any]]) -> tuple:
                     return tuple(zip(*r))
 
-                query_result['documents'], query_result['distances'] = (
-                    _transpose(
+                try:
+                    query_result['documents'], query_result['distances'] = (
                         _transpose(
-                            sorted(
-                                zip(query_result_doc, new_distance),
-                                reverse=True,
-                                key=lambda s: s[1],
+                            _transpose(
+                                sorted(
+                                    zip(query_result_doc, new_distance),
+                                    reverse=True,
+                                    key=lambda s: s[1],
+                                )
+                            )
+                            for query_result_doc, new_distance in zip(
+                                query_result_docs, new_distances
                             )
                         )
-                        for query_result_doc, new_distance in zip(
-                            query_result_docs, new_distances
-                        )
                     )
-                )
+                except ValueError:
+                    # Nothing found.
+                    query_result['documents'] = []
+                    query_result['distances'] = []
 
         return query_result
 
@@ -423,6 +436,15 @@ class Chroma(DatabaseProvider):
             domain_name, embedding_function=self.model
         )
         return collection.add(documents=documents, metadatas=metadatas, ids=ids)
+
+    @override
+    def touch(self, domain_name: str) -> None:
+        try:
+            self.client.get_or_create_collection(
+                domain_name, embedding_function=self.model
+            )
+        except ValueError as e:
+            logger.warning(e)
 
     def __repr__(self) -> str:
         return f'<DatabaseProvider {self.__class__.__name__}>'

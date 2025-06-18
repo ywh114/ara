@@ -215,9 +215,12 @@ class CustomHuggingFace4Qwen3RerankerFunction(RerankerFunction):
         """
         _ = kwargs
         logger.debug(f'Reranking {len(instructions)} documents.')
-        return self.compute_logits(
-            self.process_inputs(self.reformat_inputs(instructions))
-        )
+        if instructions:
+            return self.compute_logits(
+                self.process_inputs(self.reformat_inputs(instructions))
+            )
+        else:
+            return []
 
     def reformat_inputs(self, instructions: list[tuple[str, str]]) -> list[str]:
         return [f'{task}\n<Document>: {doc}' for task, doc in instructions]

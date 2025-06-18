@@ -4,7 +4,11 @@ from datetime import datetime
 from pprint import pp
 from typing import TypeVar
 
-from llm.utils.context_manager import MultiroundContextManager
+from llm.utils.context_manager import (
+    Context,
+    MultiroundContextManager,
+    RegisterHook,
+)
 from llm.utils.openai_api import (
     ChatCompletionToolParams,
     LLMProfile,
@@ -18,11 +22,14 @@ from llm.utils.stream import (
     CustomStreamHook,
     ReasoningContentStr,
 )
-from openai.types.chat import ChatCompletionChunk
+from openai.types.chat import (
+    ChatCompletionChunk,
+)
 from llm.api import GameLLM
+from world.character.character_class import Character
 from world.character.memory import Memory
 from utils.ansi import DARKGREY, END, GREEN
-from utils import timestamp
+from utils.timestamp import timestamp
 from utils.logger import get_logger
 
 from examples.config import confh
@@ -90,7 +97,6 @@ get_time = GameLLM.create_tool(
 tools: ChatCompletionToolParams = [
     {'type': 'function', 'function': get_weather},
     {'type': 'function', 'function': get_time},
-    {'type': 'function', 'function': Memory.write_scratch},
 ]
 
 example_profile = LLMProfile(
@@ -99,9 +105,12 @@ example_profile = LLMProfile(
     confh.games.api_example_api_endpoint,
     model=confh.games.api_example_api_model,
     capture_finish=capture_finish,
-    system_prompt=f"""Write your next reply from {{user}}'s point of view. Write how you think {{user}} would reply based on {{user}}'s previous messages. Avoid writing as the character(s) or Narrator.
+    system_prompt=f"""Write your next reply from {{user}}'s point of view.
+Write how you think {{user}} would reply based on {{user}}'s previous messages.
+Avoid writing as the character(s) or Narrator.
+Only use newlines to seperate speech from actions.
 
-Do not prefix your messages with <{{user}}>. This is done automatically.
+CRITICAL: NEVER prefix your messages with <{{user}}>. This is done automatically by the system!
 
 Today is {timestamp.month_name} {timestamp.day_name}, {timestamp.year}. It is {timestamp.day_of_week_name}. 
 """.format(user=cardh.get_field('name')),
@@ -113,38 +122,77 @@ Today is {timestamp.month_name} {timestamp.day_name}, {timestamp.year}. It is {t
 llm = GameLLM(example_profile)
 
 
-def example_conversation(llm: GameLLM, *, stream: bool = True) -> None:
-    cm0 = MultiroundContextManager(char.whoami)
-    user_prompt = ''
-    while 'exit' not in user_prompt.lower():
-        user_prompt = input('User> ')
-        with MultiroundContextManager(tmp_from=cm0) as cm1:
-            cm1.concat_context(char.scratch)
-            cm1.user_message(user_prompt)
-            pp(cm1.context)
-            completion = llm.completion(
-                'example',
-                cm1,
-                stream=stream,
-                specific_tool_hook=char.memory.write_scratch_hook,
-            )
+@RegisterHook
+def example_register_hook(x: Character, y: Context):
+    pp(x)
+    pp(y)
 
-        cm0.user_message(user_prompt)
-        if stream:
-            assert isinstance(completion, CustomStreamHandler)
-            cm0.assistant_message(
-                completion.exhaust().content_with_tool_blurbs,
-                tool_calls=[],
-                name=char.cardh.get_field('name'),
-            )
-            print()
-        else:
-            assert isinstance(completion, CustomResponseStr)
-            cm0.assistant_message(
-                completion.content_with_tool_blurbs,
-                tool_calls=[],
-                name=char.cardh.get_field('name'),
-            )
+
+def example_conversation(llm: GameLLM, *, stream: bool = True) -> None:
+    with MultiroundContextManager(
+        char,
+        register_hook=example_register_hook,
+    ) as cm0:
+        user_prompt = ''
+        while 'exit' not in user_prompt.lower():
+            user_prompt = input('User> ')
+            # First round of injections.
+            with MultiroundContextManager(
+                injected_context=char.whoami, tmp_from=cm0
+            ) as cm1:
+                cm1.concat_context(char.scratch)
+                cm1.user_message(user_prompt)
+                pp(cm1.context)
+                completion = llm.completion(
+                    'example',
+                    cm1,
+                    stream=stream,
+                )
+
+            # Save output.
+            cm0.user_message(user_prompt)
+            if stream:
+                assert isinstance(completion, CustomStreamHandler)
+                cm0.assistant_message(
+                    completion.exhaust().content_with_tool_blurbs,
+                    tool_calls=[],
+                    name=char.cardh.get_field('name'),
+                )
+                print()
+            else:
+                assert isinstance(completion, CustomResponseStr)
+                cm0.assistant_message(
+                    completion.content_with_tool_blurbs,
+                    tool_calls=[],
+                    name=char.cardh.get_field('name'),
+                )
+
+            # Second round of injections.
+            with MultiroundContextManager(
+                injected_context=char.whoami, tmp_from=cm0
+            ) as cm1:
+                cm1.user_message(
+                    'Based on the previous round of conversation, '
+                    'update your scratchpad.\n'
+                    'Use this space to reason and come up with plans.\n'
+                    'Include all your secrets, thoughts and plans. '
+                    'Stay in character!',
+                    name='System',
+                )
+                completion = llm.completion(
+                    'example',
+                    cm1,
+                    stream=stream,
+                    specific_tools=[
+                        {'type': 'function', 'function': Memory.write_scratch}
+                    ],
+                    specific_tool_hook=char.memory.write_scratch_hook_end,
+                    tool_choice='required',
+                )
+
+                if stream:
+                    assert isinstance(completion, CustomStreamHandler)
+                    completion.exhaust()
 
 
 if __name__ == '__main__':

@@ -1,24 +1,35 @@
 #!/usr/bin/env python3
+# https://cookbook.chromadb.dev/core/filters/#less-than-or-equal-lte
 # TODO: Rewrite
 import operator
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields
-from datetime import datetime
 from typing import (
     Any,
     Callable,
     Generic,
+    Iterator,
+    Mapping,
     Self,
     TypeAlias,
     TypeVar,
     override,
 )
 
-from chromadb import Documents, IDs, Metadata, Metadatas, QueryResult
+from chromadb import (
+    Documents,
+    IDs,
+    Metadata,
+    Metadatas,
+    QueryResult,
+    Where,
+    WhereDocument,
+)
 from chromadb.api.types import ID, Document
 from llm.database import DatabaseProvider
 from utils.exceptions import KnowledgeSpecError
 from utils.logger import get_logger
+from utils.timestamp import timestamp
 
 T = TypeVar('T', bound='KSearchSpec')
 U = TypeVar('U', bound='KReturnSpec')
@@ -77,6 +88,12 @@ class KAddSpecExtender(KSpecExtender):
     document: Document
     metadata: Metadata
     id: ID
+
+    def __post_init__(self) -> None:
+        metadata = {k: v for k, v in self.metadata.items()}
+        metadata.setdefault('timestamp', timestamp.timestamp)
+        self.metadata = metadata
+        return super().__post_init__()
 
 
 @dataclass
@@ -186,6 +203,7 @@ class KSpecBase(ABC, Generic[V]):
 class KAddSpec(KSpecBase[KAddSpecExtender]):
     """
     Specification for adding knowledge entries.
+    Adds timestamp.
 
     :ivar documents: List of documents to add.
     :ivar metadatas: List of metadata dictionaries.
@@ -227,8 +245,8 @@ class KSearchSpec(KSpecBase[KSearchSpecExtender]):
     _rerank_task: str
     _with_reranker: bool
     _reranker_context: bool
-    _where: dict[str, str] | None
-    _where_documents: dict[str, str] | None
+    _where: Where | None
+    _where_documents: WhereDocument | None
     _ids: IDs | None
 
     @classmethod
@@ -240,8 +258,8 @@ class KSearchSpec(KSpecBase[KSearchSpecExtender]):
         rerank_task: str = '',
         with_reranker: bool = False,
         reranker_context: bool = False,
-        where: dict[str, str] | None = None,
-        where_documents: dict[str, str] | None = None,
+        where: Where | None = None,
+        where_documents: WhereDocument | None = None,
         ids: IDs | None = None,
     ) -> Self:
         """
@@ -303,8 +321,8 @@ class KReturnSpec(KSpecBase[NotExtendable]):
     instruct_task: str
     with_reranker: bool
     reranker_context: bool
-    where: dict[str, str] | None
-    where_documents: dict[str, str] | None
+    where: Where | None
+    where_documents: WhereDocument | None
     ids: IDs | None
     query_results: tuple[QueryResult, ...]
 
@@ -365,11 +383,13 @@ class KReturnSpec(KSpecBase[NotExtendable]):
             )
         )
 
-        self.n_results_actual = [len(qr['ids'][0]) for qr in self.query_results]
+        self.n_results_actual = [
+            len(qr['ids'][0]) for qr in self.query_results
+        ] or [0]
 
 
 @dataclass
-class Knowledge(ABC, dict[T, U]):
+class Knowledge(ABC, Mapping[T, U]):
     """
     Abstract knowledge base implementing dictionary-like interface.
 
@@ -379,13 +399,23 @@ class Knowledge(ABC, dict[T, U]):
 
     domain_name: str
     db: DatabaseProvider
+    length: int = 0
+    iter: Iterator[T] = iter(())
+
+    @override
+    def __len__(self) -> int:
+        return self.length
+
+    @override
+    def __iter__(self) -> Iterator[T]:
+        raise NotImplementedError  # FIXME: Implement
 
     @abstractmethod
     def __perform_getitem__(self, spec: T) -> U:
         """Implementation of `__getitem__`"""
 
     @abstractmethod
-    def __perform_setitem__(self, spec: T, data: U) -> None:
+    def __perform_setitem__(self, spec: T, data: KAddSpec) -> None:
         """Implementation of `__setitem__`"""
 
     @abstractmethod
@@ -409,8 +439,7 @@ class Knowledge(ABC, dict[T, U]):
     # Permanent collection X, temporary collection Y
     # This function merges query results from Y with X.
     # Y is cleared afterwards.
-    @override
-    def __setitem__(self, spec: T, data: U) -> None:
+    def __setitem__(self, spec: T, data: KAddSpec) -> None:
         """
         Merge return data against a search specification.
 
@@ -429,6 +458,10 @@ class RAGKnowledge(Knowledge[KSearchSpec, KReturnSpec]):
 
     Provides concrete database operations for RAG systems.
     """
+
+    def __post_init__(self) -> None:
+        """Touch the domain."""
+        self.db.touch(self.domain_name)
 
     @override
     def __perform_getitem__(self, spec: KSearchSpec) -> KReturnSpec:
@@ -468,7 +501,7 @@ class RAGKnowledge(Knowledge[KSearchSpec, KReturnSpec]):
         )
 
     @override
-    def __perform_setitem__(self, spec: KSearchSpec, data) -> None:
+    def __perform_setitem__(self, spec: KSearchSpec, data: KAddSpec) -> None:
         """Placeholder for result merging."""  # FIXME: Implement.
         pass
 
@@ -479,6 +512,7 @@ class RAGKnowledge(Knowledge[KSearchSpec, KReturnSpec]):
 
         :param spec: Add specification containing documents.
         """
+        self.length += len(spec.ids)
         self.db.add(
             domain_name=self.domain_name,
             documents=spec.documents,
@@ -508,6 +542,9 @@ class RAGKnowledge(Knowledge[KSearchSpec, KReturnSpec]):
 
         if metadatasl is None or distancesl is None:
             raise RuntimeError('Metadatas/distances should not be `None`.')
+
+        if not all((metadatasl, distancesl)):  # Empty result
+            return ()
 
         embeddings = qr['embeddings']
         included = qr['included']

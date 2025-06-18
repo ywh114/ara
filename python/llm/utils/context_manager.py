@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import operator
 from functools import reduce, update_wrapper
+import re
 from typing import (
     Callable,
     ContextManager,
@@ -9,6 +10,7 @@ from typing import (
     TypeAlias,
     TypeVar,
     override,
+    reveal_type,
 )
 
 from openai.types.chat import (
@@ -52,6 +54,7 @@ class MultiroundContextManager(ContextManager, Generic[T]):
 
     def __init__(
         self,
+        *entities: T,
         injected_context: Context | None = None,
         register_hook: RegisterHook[T] = no_register_hook,
         tmp_from: Self | None = None,
@@ -61,8 +64,12 @@ class MultiroundContextManager(ContextManager, Generic[T]):
             self.context: Context = []
             self.head: ChatCompletionMessageParam | None = None
             self.seen_entities: dict[T, list[slice]] = {}
+            self.present_entities: set[T] = set()
             # Called on exit.
             self.register_hook: RegisterHook[T] = register_hook
+
+            # Add entities.
+            self.enter_entities(*entities)
         else:
             # Create a temporary context.
             self.injected_context: Context = tmp_from.injected_context.copy()
@@ -70,6 +77,7 @@ class MultiroundContextManager(ContextManager, Generic[T]):
             self.head: ChatCompletionMessageParam | None = (
                 tmp_from.head.copy() if tmp_from.head else None
             )
+            self.present_entities: set[T] = tmp_from.present_entities.copy()
             self.seen_entities: dict[T, list[slice]] = (
                 tmp_from.seen_entities.copy()
             )
@@ -87,7 +95,7 @@ class MultiroundContextManager(ContextManager, Generic[T]):
                 char, reduce(operator.add, (self.context[sl] for sl in slices))
             )
 
-    def enter_characters(self, *entities: T) -> None:
+    def enter_entities(self, *entities: T) -> None:
         for entity in entities:
             sl = slice(len(self.context), None)
 
@@ -98,6 +106,8 @@ class MultiroundContextManager(ContextManager, Generic[T]):
             if last_appearance.stop is None:
                 raise RuntimeError(f'{entity} has already entered the scene.')
             self.seen_entities[entity] += [sl]
+
+        self.present_entities |= set(entities)
 
     def exit_characters(self, *entities: T) -> None:
         for entity in entities:
@@ -111,7 +121,9 @@ class MultiroundContextManager(ContextManager, Generic[T]):
 
             self.seen_entities[entity][-1] = sl
 
-    def user_message(self, content, name=default_user_name) -> Self:
+        self.present_entities -= set(entities)
+
+    def user_message(self, content: str, name=default_user_name) -> Self:
         if self.head is not None and self.head['role'] != 'assistant':
             raise RuntimeError(
                 'User message must come after system or assistant message.'
@@ -168,7 +180,10 @@ class MultiroundContextManager(ContextManager, Generic[T]):
         if suppress_decorations:
             _content = content
         else:
-            _content = f'<{name}>: {content}'
+            _decoration = f'<{name}>:'
+            _content = (
+                f'{_decoration} {re.sub(rf"^({_decoration})*", "", content)}'
+            ).strip()  # In case LLM copies extra decorations.
         if tc:
             self.head = {
                 'role': 'assistant',
