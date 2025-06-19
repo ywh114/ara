@@ -10,8 +10,8 @@ from llm.utils.context_manager import (
     RegisterHook,
 )
 from llm.utils.openai_api import (
-    ChatCompletionToolParams,
     LLMProfile,
+    ToolsHookPair,
 )
 from llm.utils.stream import (
     ContentStr,
@@ -24,19 +24,21 @@ from llm.utils.stream import (
 )
 from openai.types.chat import (
     ChatCompletionChunk,
+    ChatCompletionToolParam,
 )
 from llm.api import GameLLM
+from world.character_roles import RoleProfiles
 from world.character.character_class import Character
-from world.character.memory import Memory
 from utils.ansi import DARKGREY, END, GREEN
-from utils.timestamp import timestamp
 from utils.logger import get_logger
 
 from examples.config import confh
-from examples.card import cardh
 from examples.character import char
 
 logger = get_logger(__name__)
+
+
+rp = RoleProfiles(confh)
 
 
 @CustomStreamHook
@@ -94,10 +96,15 @@ get_time = GameLLM.create_tool(
     required=['location'],
 )
 
-tools: ChatCompletionToolParams = [
+tools: list[ChatCompletionToolParam] = [
     {'type': 'function', 'function': get_weather},
     {'type': 'function', 'function': get_time},
 ]
+
+universal_character_tp = ToolsHookPair(
+    tools=[get_weather, get_time],
+    hook=get_weather_hook | get_time_hook,
+)
 
 example_profile = LLMProfile(
     'example',
@@ -105,18 +112,9 @@ example_profile = LLMProfile(
     confh.games.api_example_api_endpoint,
     model=confh.games.api_example_api_model,
     capture_finish=capture_finish,
-    system_prompt=f"""Write your next reply from {{user}}'s point of view.
-Write how you think {{user}} would reply based on {{user}}'s previous messages.
-Avoid writing as the character(s) or Narrator.
-Only use newlines to seperate speech from actions.
-
-CRITICAL: NEVER prefix your messages with <{{user}}>. This is done automatically by the system!
-
-Today is {timestamp.month_name} {timestamp.day_name}, {timestamp.year}. It is {timestamp.day_of_week_name}. 
-""".format(user=cardh.get_field('name')),
     stream_hook=print_each_word_hook | cat_hook,
-    tool_hook=get_weather_hook | get_time_hook,
-    completion_kwargs={'tools': tools},
+    tool_hook=universal_character_tp.hook,
+    completion_kwargs={'tools': universal_character_tp.toolparams},
 )
 
 llm = GameLLM(example_profile)
@@ -134,8 +132,10 @@ def example_conversation(llm: GameLLM, *, stream: bool = True) -> None:
         register_hook=example_register_hook,
     ) as cm0:
         user_prompt = ''
-        while 'exit' not in user_prompt.lower():
+        while True:
             user_prompt = input('User> ')
+            exit_round = 'exit' in user_prompt.lower()
+
             # First round of injections.
             with MultiroundContextManager(
                 injected_context=char.whoami, tmp_from=cm0
@@ -145,8 +145,11 @@ def example_conversation(llm: GameLLM, *, stream: bool = True) -> None:
                 pp(cm1.context)
                 completion = llm.completion(
                     'example',
+                    rp.get_character_system_prompt(char, ''),
                     cm1,
                     stream=stream,
+                    specific_tools=char.memory.chat_tools.toolparams,
+                    specific_tool_hook=char.memory.chat_tools.hook,
                 )
 
             # Save output.
@@ -167,32 +170,60 @@ def example_conversation(llm: GameLLM, *, stream: bool = True) -> None:
                     name=char.cardh.get_field('name'),
                 )
 
+            if exit_round:
+                break
+
             # Second round of injections.
             with MultiroundContextManager(
                 injected_context=char.whoami, tmp_from=cm0
             ) as cm1:
+                cm1.concat_context(char.scratch)
                 cm1.user_message(
-                    'Based on the previous round of conversation, '
-                    'update your scratchpad.\n'
-                    'Use this space to reason and come up with plans.\n'
-                    'Include all your secrets, thoughts and plans. '
-                    'Stay in character!',
+                    rp.get_user_handover_scratch_prompt(char),
                     name='System',
                 )
                 completion = llm.completion(
                     'example',
+                    rp.get_character_scratch_writer_system_prompt(char, ''),
                     cm1,
                     stream=stream,
-                    specific_tools=[
-                        {'type': 'function', 'function': Memory.write_scratch}
-                    ],
-                    specific_tool_hook=char.memory.write_scratch_hook_end,
+                    specific_tools=char.memory.chat_tools_end.toolparams,
+                    specific_tool_hook=char.memory.chat_tools_end.hook,
                     tool_choice='required',
                 )
 
                 if stream:
                     assert isinstance(completion, CustomStreamHandler)
                     completion.exhaust()
+
+        pp('END OF CONVERSATION 0')
+        pp(char.memory.scratch)
+
+        # Exit injections.
+        with MultiroundContextManager(
+            injected_context=char.whoami, tmp_from=cm0
+        ) as cm1:
+            cm1.concat_context(char.scratch)
+            cm1.user_message(
+                rp.get_user_handover_scratch_prompt_conversation_end(char),
+                name='System',
+            )
+            completion = llm.completion(
+                'example',
+                rp.get_character_scratch_writer_system_prompt_end(char, ''),
+                cm1,
+                stream=stream,
+                specific_tools=char.memory.chat_tools_end.toolparams,
+                specific_tool_hook=char.memory.chat_tools_end.hook,
+                tool_choice='required',
+            )
+
+            if stream:
+                assert isinstance(completion, CustomStreamHandler)
+                completion.exhaust()
+
+        pp('END OF CONVERSATION 1')
+        pp(char.memory.scratch)
 
 
 if __name__ == '__main__':

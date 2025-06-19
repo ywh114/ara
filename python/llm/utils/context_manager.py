@@ -39,8 +39,8 @@ class RegisterHook(Generic[T]):
         self.hook = fn
         update_wrapper(self, fn)
 
-    def __call__(self, char: T, context: Context) -> None:
-        return self.hook(char, context)
+    def __call__(self, entity: T, context: Context) -> None:
+        return self.hook(entity, context)
 
 
 @RegisterHook
@@ -59,7 +59,9 @@ class MultiroundContextManager(ContextManager, Generic[T]):
         register_hook: RegisterHook[T] = no_register_hook,
         tmp_from: Self | None = None,
     ) -> None:
-        if tmp_from is None:
+        self.base = tmp_from is None
+        if self.base:
+            assert tmp_from is None
             self.injected_context: Context = injected_context or []
             self.context: Context = []
             self.head: ChatCompletionMessageParam | None = None
@@ -71,6 +73,7 @@ class MultiroundContextManager(ContextManager, Generic[T]):
             # Add entities.
             self.enter_entities(*entities)
         else:
+            assert tmp_from is not None
             # Create a temporary context.
             self.injected_context: Context = tmp_from.injected_context.copy()
             self.context: Context = tmp_from.context.copy()
@@ -84,15 +87,32 @@ class MultiroundContextManager(ContextManager, Generic[T]):
             # No register hook for temporary context.
             self.register_hook: RegisterHook[T] = no_register_hook
 
+    def context_of(self, entity: T) -> Context:
+        return reduce(
+            operator.add,
+            (self.context[sl] for sl in self.seen_entities[entity]),
+        )
+
+    def filter_to(self, entity: T, confirm_destructive: bool = False) -> None:
+        if not confirm_destructive:
+            if self.base:
+                raise RuntimeError(
+                    'Cannot perform a destructive conversation filter '
+                    'unless `confirm_destructive` is `True`.'
+                )
+        self.context = self.context_of(entity)
+        self.head = self.context[-1]
+
     @override
     def __enter__(self) -> Self:
         return self
 
     @override
     def __exit__(self, *_) -> None:
-        for char, slices in self.seen_entities.items():
+        for entity, slices in self.seen_entities.items():
             self.register_hook(
-                char, reduce(operator.add, (self.context[sl] for sl in slices))
+                entity,
+                reduce(operator.add, (self.context[sl] for sl in slices)),
             )
 
     def enter_entities(self, *entities: T) -> None:
@@ -109,7 +129,7 @@ class MultiroundContextManager(ContextManager, Generic[T]):
 
         self.present_entities |= set(entities)
 
-    def exit_characters(self, *entities: T) -> None:
+    def exit_entities(self, *entities: T) -> None:
         for entity in entities:
             if entity not in self.seen_entities:
                 raise RuntimeError(f'{entity} is not in the scene.')
@@ -233,5 +253,7 @@ class MultiroundContextManager(ContextManager, Generic[T]):
 
         return self
 
-    def tolist(self) -> Context:
-        return self.injected_context + self.context
+    def tolist(self, entity: T | None = None) -> Context:
+        return self.injected_context + (
+            self.context_of(entity) if entity else self.context
+        )

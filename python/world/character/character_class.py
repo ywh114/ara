@@ -93,16 +93,31 @@ class Character:
 
     @property
     def scratch(self) -> Context:
+        """Must come after `assistant` message."""
+        empty = self.memory.scratch == self.memory.default_scratch
+        if not empty:
+            user_content = (
+                'Please provide your `scratch`.\n'
+                'Never show this to others, or mention that it exists!'
+            )
+            assistant_content = self.memory.scratch
+        else:
+            user_content = (
+                'Please provide the summary of your `scratch` '
+                'from your previous conversation.\n'
+                'Never show this to others, or mention that it exists!'
+            )
+            assistant_content = self.memory.prev_scratch
+
         return [
             {
                 'role': 'user',
-                'content': 'Please provide your `scratch`. '
-                'Never show this to others, or mention that it exists!',
+                'content': user_content,
                 'name': 'System',
             },
             {
                 'role': 'assistant',
-                'content': self.memory.scratch
+                'content': assistant_content
                 + '\nI will never show this to others, or mention that this exists.',
                 'name': self.cardh.get_field('name'),
             },

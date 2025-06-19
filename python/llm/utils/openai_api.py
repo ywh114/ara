@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
-# TODO: Write ConversationManager for single multiround.
-# TODO: Add conversations to db.
+# TODO: Rewrite. Do not thread generics.
 from functools import partial
 from typing import (
     Any,
     Callable,
+    Generic,
     Iterable,
     Iterator,
     Literal,
+    NamedTuple,
     TypeAlias,
+    TypeVar,
     TypedDict,
     overload,
     override,
+    reveal_type,
 )
+
+from openai.types.shared_params.function_definition import FunctionDefinition
 
 from llm.utils.context_manager import MultiroundContextManager
 from llm.utils.stream import (
@@ -46,14 +51,28 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
+T = TypeVar('T')
+U = TypeVar('U')
+X = TypeVar('X')
+Y = TypeVar('Y')
+
+
+class ToolsHookPair(NamedTuple):
+    tools: list[FunctionDefinition]
+    hook: CustomToolHook
+
+    @property
+    def toolparams(self) -> list[ChatCompletionToolParam]:
+        return [{'type': 'function', 'function': tool} for tool in self.tools]
+
+
 FinishReason: TypeAlias = Literal[
     'stop', 'length', 'tool_calls', 'content_filter', 'function_call'
 ]
 
-ChatCompletionToolParams: TypeAlias = Iterable[ChatCompletionToolParam]
 
-
-@CustomCaptureFinish
+@CustomCaptureFinish[ChatCompletionChunk]
 def capture_finish(chunk: ChatCompletionChunk) -> bool:
     # TODO: Handle refusals/connection errors.
     return bool(chunk.choices[0].finish_reason)
@@ -68,7 +87,7 @@ class ExtraPayloadContents(TypedDict):
     stream_options: ChatCompletionStreamOptionsParam | NotGiven
     temperature: float | NotGiven
     top_p: int | NotGiven
-    tools: ChatCompletionToolParams | NotGiven
+    tools: list[ChatCompletionToolParam] | NotGiven
     tool_choice: ChatCompletionToolChoiceOptionParam | NotGiven
     logprobs: bool | NotGiven
 
@@ -116,7 +135,7 @@ def _payload_from_partial(
     }
 
 
-class LLMProfile:
+class LLMProfile(Generic[T, U, X, Y]):
     """Profile for OpenAI-style API."""
 
     def __init__(
@@ -125,10 +144,9 @@ class LLMProfile:
         api_key: str,
         base_url: str,
         model: str,
-        system_prompt: str,
         capture_finish: CustomCaptureFinish = capture_finish,
-        stream_hook: CustomStreamHook = no_stream_hook,
-        tool_hook: CustomToolHook = no_tool_hook,
+        stream_hook: CustomStreamHook[T, U, X, Y] = no_stream_hook,
+        tool_hook: CustomToolHook[T, U, X, Y] = no_tool_hook,
         completion_kwargs: dict[str, Any] | None = None,
         openai_kwargs: dict[str, Any] | None = None,
         reasoning_field_name: str = 'reasoning_content',
@@ -138,7 +156,6 @@ class LLMProfile:
             api_key=api_key, base_url=base_url, **(openai_kwargs or {})
         )
         self.model = model
-        self.system_prompt = system_prompt
         self.capture_finish = capture_finish
         self.stream_hook = stream_hook
         self.tool_hook = tool_hook
@@ -147,16 +164,51 @@ class LLMProfile:
         self.completion_kwargs = _payload_from_partial(completion_kwargs)
 
 
-class LLMWrapper(dict[str, LLMProfile]):
-    def __init__(self, *profiles: LLMProfile) -> None:
+class LLMWrapper(
+    dict[
+        str,
+        LLMProfile[
+            ChatCompletionChunk,
+            T,
+            ChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+        ],
+    ]
+):
+    def __init__(
+        self,
+        *profiles: LLMProfile[
+            ChatCompletionChunk,
+            T,
+            ChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+        ],
+    ) -> None:
         self.profiles = {profile.key: profile for profile in profiles}
 
     @override
-    def __setitem__(self, key: str, profile: LLMProfile, /) -> None:
+    def __setitem__(
+        self,
+        key: str,
+        profile: LLMProfile[
+            ChatCompletionChunk,
+            T,
+            ChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+        ],
+        /,
+    ) -> None:
         self.profiles |= {key: profile}
 
     @override
-    def __getitem__(self, key: str, /) -> LLMProfile:
+    def __getitem__(
+        self, key: str, /
+    ) -> LLMProfile[
+        ChatCompletionChunk,
+        T,
+        ChatCompletionMessage,
+        ChatCompletionMessageToolCall,
+    ]:
         return self.profiles[key]
 
     @override
@@ -167,7 +219,8 @@ class LLMWrapper(dict[str, LLMProfile]):
     def completion(
         self,
         profile_key: str,
-        context_manager: MultiroundContextManager,
+        system_prompt: str,
+        context_manager: MultiroundContextManager[T],
         /,
         stream: Literal[False],
         *,
@@ -181,12 +234,12 @@ class LLMWrapper(dict[str, LLMProfile]):
         | None = None,
         temperature: float | NotGiven | None = None,
         top_p: int | NotGiven | None = None,
-        tools: ChatCompletionToolParams | NotGiven | None = None,
+        tools: list[ChatCompletionToolParam] | NotGiven | None = None,
         tool_choice: ChatCompletionToolChoiceOptionParam
         | NotGiven
         | None = None,
         logprobs: bool | NotGiven | None = None,
-        specific_tools: ChatCompletionToolParams | NotGiven | None = None,
+        specific_tools: list[ChatCompletionToolParam] | NotGiven | None = None,
         specific_tool_hook: CustomToolHook | NotGiven | None = None,
     ) -> CustomResponseStr: ...
 
@@ -194,7 +247,8 @@ class LLMWrapper(dict[str, LLMProfile]):
     def completion(
         self,
         profile_key: str,
-        context_manager: MultiroundContextManager,
+        system_prompt: str,
+        context_manager: MultiroundContextManager[T],
         /,
         stream: Literal[True],
         *,
@@ -208,12 +262,12 @@ class LLMWrapper(dict[str, LLMProfile]):
         | None = None,
         temperature: float | NotGiven | None = None,
         top_p: int | NotGiven | None = None,
-        tools: ChatCompletionToolParams | NotGiven | None = None,
+        tools: list[ChatCompletionToolParam] | NotGiven | None = None,
         tool_choice: ChatCompletionToolChoiceOptionParam
         | NotGiven
         | None = None,
         logprobs: bool | NotGiven | None = None,
-        specific_tools: ChatCompletionToolParams | NotGiven | None = None,
+        specific_tools: list[ChatCompletionToolParam] | NotGiven | None = None,
         specific_tool_hook: CustomToolHook  # TODO: Generics
         | NotGiven
         | None = None,
@@ -222,7 +276,8 @@ class LLMWrapper(dict[str, LLMProfile]):
     def completion(
         self,
         profile_key: str,
-        context_manager: MultiroundContextManager,
+        system_prompt: str,
+        context_manager: MultiroundContextManager[T],
         /,
         stream: bool = False,
         *,
@@ -236,16 +291,14 @@ class LLMWrapper(dict[str, LLMProfile]):
         | None = None,
         temperature: float | NotGiven | None = None,
         top_p: int | NotGiven | None = None,
-        tools: ChatCompletionToolParams | NotGiven | None = None,
+        tools: list[ChatCompletionToolParam] | NotGiven | None = None,
         tool_choice: ChatCompletionToolChoiceOptionParam
         | NotGiven
         | None = None,
         logprobs: bool | NotGiven | None = None,
-        specific_tools: ChatCompletionToolParams | NotGiven | None = None,
+        specific_tools: list[ChatCompletionToolParam] | NotGiven | None = None,
         specific_tool_hook: CustomToolHook | NotGiven | None = None,
     ) -> str | CustomStreamHandler[ChatCompletionChunk]:
-        _tools = list(tools or []) + list(specific_tools or [])
-
         profile = self.profiles[profile_key]
         instance_completion_kwargs: ExtraPayloadContents = {
             'frequency_penalty': frequency_penalty or NotGiven(),
@@ -256,7 +309,7 @@ class LLMWrapper(dict[str, LLMProfile]):
             'stream_options': stream_options or NotGiven(),
             'temperature': temperature or NotGiven(),
             'top_p': top_p or NotGiven(),
-            'tools': _tools or NotGiven(),
+            'tools': tools or NotGiven(),
             'tool_choice': tool_choice or NotGiven(),
             'logprobs': logprobs or NotGiven(),
         }
@@ -267,19 +320,24 @@ class LLMWrapper(dict[str, LLMProfile]):
             instance_completion_kwargs, profile.completion_kwargs
         )
 
+        # Concat `specific_tools`.
+        if completion_kwargs['tools']:
+            completion_kwargs['tools'] += specific_tools or []
+
         logger.debug(
             f'Sent request to {profile.client.base_url} {profile.model}.'
         )
         response = profile.client.chat.completions.create(
             model=profile.model,
             messages=[
-                {'role': 'system', 'content': profile.system_prompt},
+                {'role': 'system', 'content': system_prompt},
                 *context_manager.tolist(),
             ],
             stream=stream,
             **completion_kwargs,
         )
 
+        # Concat `specific_tool_hook`.
         tool_hook = (
             profile.tool_hook
             if not specific_tool_hook
@@ -304,13 +362,20 @@ class LLMWrapper(dict[str, LLMProfile]):
                 message = response.choices[0].message
                 this_fn = self._get_completion_function(
                     profile_key=profile_key,
+                    system_prompt=system_prompt,
                     stream=stream,
                     kwargs=completion_kwargs,
                 )
                 args = CustomHookArgs(
                     called_by=this_fn,
                     context_manager=self.context_manager,
-                    head=None,
+                    head=ChatCompletionChunk(
+                        id='',
+                        choices=[],
+                        created=0,
+                        model='',
+                        object='chat.completion.chunk',
+                    ),
                     chunks=[],
                     head_as_str=ContentStr(),
                     text=response_str,
@@ -338,6 +403,7 @@ class LLMWrapper(dict[str, LLMProfile]):
             )
             this_fn = self._get_completion_function(
                 profile_key=profile_key,
+                system_prompt=system_prompt,
                 stream=stream,
                 kwargs=completion_kwargs,
             )
@@ -373,6 +439,7 @@ class LLMWrapper(dict[str, LLMProfile]):
     def _get_completion_function(
         self,
         profile_key: str,
+        system_prompt: str,
         stream: Literal[False],
         kwargs: ExtraPayloadContents,
     ) -> Callable[
@@ -383,6 +450,7 @@ class LLMWrapper(dict[str, LLMProfile]):
     def _get_completion_function(
         self,
         profile_key: str,
+        system_prompt: str,
         stream: Literal[True],
         kwargs: ExtraPayloadContents,
     ) -> Callable[
@@ -391,7 +459,11 @@ class LLMWrapper(dict[str, LLMProfile]):
     ]: ...
 
     def _get_completion_function(
-        self, profile_key: str, stream: bool, kwargs: ExtraPayloadContents
+        self,
+        profile_key: str,
+        system_prompt: str,
+        stream: bool,
+        kwargs: ExtraPayloadContents,
     ) -> CalledByFnType[ChatCompletionChunk]:
         def _completion_function(
             context_manager: MultiroundContextManager,
@@ -403,6 +475,7 @@ class LLMWrapper(dict[str, LLMProfile]):
             # Allow temporary settings override.
             completion = self.completion(
                 profile_key,
+                system_prompt,
                 context_manager,
                 stream=stream,
                 **_payload_from_partial(mask_kwargs, kwargs),

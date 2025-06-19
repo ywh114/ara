@@ -24,6 +24,18 @@ class Timestamp:
         return self.to_timestamp(self.now)
 
     @property
+    def hour(self) -> int:
+        return self.now.hour
+
+    @property
+    def minute(self) -> int:
+        return self.now.minute
+
+    @property
+    def second(self) -> int:
+        return self.now.second
+
+    @property
     def today(self) -> datetime:
         return datetime.today()
 

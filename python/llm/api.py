@@ -2,7 +2,6 @@
 from typing import (
     Any,
     Callable,
-    Generic,
     TypeAlias,
     TypeVar,
     override,
@@ -44,13 +43,18 @@ CustomToolHookContentsFn: TypeAlias = Callable[
 ]
 
 
-class GameLLM(LLMWrapper, Generic[T]):
+class GameLLM(LLMWrapper[T]):
     default_blurb_fstring = '<TOOL//{name}>'
 
     @override
     def __init__(
         self,
-        *profiles: LLMProfile,
+        *profiles: LLMProfile[
+            ChatCompletionChunk,
+            T,
+            ChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+        ],
         blurb_fstring: str | None = None,
     ) -> None:
         super().__init__(*profiles)
