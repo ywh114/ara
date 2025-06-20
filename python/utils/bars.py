@@ -1,8 +1,26 @@
 #!/usr/bin/env python3
+############################################################################
+#                                                                          #
+#  Copyright (C) 2025                                                      #
+#                                                                          #
+#  This program is free software: you can redistribute it and/or modify    #
+#  it under the terms of the GNU General Public License as published by    #
+#  the Free Software Foundation, either version 3 of the License, or       #
+#  (at your option) any later version.                                     #
+#                                                                          #
+#  This program is distributed in the hope that it will be useful,         #
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of          #
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the           #
+#  GNU General Public License for more details.                            #
+#                                                                          #
+#  You should have received a copy of the GNU General Public License       #
+#  along with this program. If not, see <http://www.gnu.org/licenses/>.    #
+#                                                                          #
+############################################################################
+import operator
 from dataclasses import dataclass, field
 from enum import Flag, auto
 from functools import reduce, wraps
-from operator import or_
 from typing import Callable, Iterable, NamedTuple, TypeAlias
 from uuid import UUID
 
@@ -12,7 +30,9 @@ logger = get_logger(__name__)
 
 
 class TriggerHook:
-    """Class wrapper for trigger hooks to ensure they match the expected signature."""
+    """
+    Class wrapper for trigger hooks to ensure they match the expected signature.
+    """
 
     RType: TypeAlias = None | tuple['BarOp', dict]
     RType_defined: TypeAlias = tuple['BarOp', dict]
@@ -123,11 +143,11 @@ class Trigger:
     :ivar trigger_list: A list of trigger parts with the conditions to check.
     :ivar trigger_hook: A function that runs when trigger conditions are met.
         The hook takes two arguments:
-            - res (TriggerResult): The result of the trigger checks.
-            - bar (Bar): The current bar state.
+            - `res` (`TriggerResult`): The result of the trigger checks.
+            - `bar` (`Bar`): The current bar state.
         It returns a tuple of:
-            - BarOp: An operation to perform on the bar.
-            - dict: Additional data or context.
+            - `BarOp`: An operation to perform on the bar.
+            - `dict`: Additional data or context.
     """
 
     id: UUID
@@ -249,7 +269,7 @@ class Trigger:
         previous bar states.
 
         :param bar: The current bar state. This should not be created as a
-            copy (see `Bar`).
+        copy (see `Bar`).
         :return: A `TriggerResult` object.
         """
         assert bar._prev_bar is not None
@@ -285,7 +305,7 @@ class Trigger:
         :param result: The `TriggerResult` object.
         :return: Whether or not the label is present in the match flags.
         :raises KeyError: If the `label` does not exist in the ambient flags of
-            the `TriggerResult`.
+        the `TriggerResult`.
         """
         try:
             flag = result.ambient[label]  # pyright: ignore [reportIndexIssue]
@@ -334,10 +354,10 @@ class Bar:
     :ivar max: The maximum allowed value for the bar.
     :vartype max: float
     :ivar triggers: A single trigger or iterable of triggers associated with the
-        bar. This will be converted to a list in `__post_init__`.
-    :vartype triggers: Trigger | Iterable[Trigger]
+    bar. This will be converted to a list in `__post_init__`.
+    :vartype triggers: `(Trigger ==> Iterable[Trigger]) | Iterable[Trigger]`
     :ivar name: The name of the bar. If not provided, defaults to the string
-        representation of `bar_id`.
+    representation of `bar_id`.
     :vartype name: str | None
     :ivar label: An optional label for the bar.
     :vartype label: str | None
@@ -556,10 +576,10 @@ class Bar:
         ops, dicts = zip(*(trigger.run_hook(self) for trigger in self.triggers))
 
         if ops:
-            self.run_operation(reduce(or_, ops))
+            self.run_operation(reduce(operator.or_, ops))
 
         if dicts:
-            return reduce(or_, dicts)
+            return reduce(operator.or_, dicts)
         else:
             return {}
 

@@ -1,4 +1,22 @@
 #!/usr/bin/env python3
+############################################################################
+#                                                                          #
+#  Copyright (C) 2025                                                      #
+#                                                                          #
+#  This program is free software: you can redistribute it and/or modify    #
+#  it under the terms of the GNU General Public License as published by    #
+#  the Free Software Foundation, either version 3 of the License, or       #
+#  (at your option) any later version.                                     #
+#                                                                          #
+#  This program is distributed in the hope that it will be useful,         #
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of          #
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the           #
+#  GNU General Public License for more details.                            #
+#                                                                          #
+#  You should have received a copy of the GNU General Public License       #
+#  along with this program. If not, see <http://www.gnu.org/licenses/>.    #
+#                                                                          #
+############################################################################
 from dataclasses import dataclass
 from functools import update_wrapper
 from itertools import chain
@@ -40,10 +58,7 @@ DeltaStr: TypeAlias = ReasoningContentStr | ContentStr | ToolBlurbStr
 """
 Type alias for string deltas in streamed responses.
 
-Represents possible string fragments that can be yielded during streaming:
-- ReasoningContentStr: Thought process content
-- ContentStr: Regular response content
-- ToolBlurbStr: Tool call descriptions
+`ReasoningContentStr` | `ContentStr` | `ToolBlurbStr`
 """
 
 
@@ -160,9 +175,9 @@ CalledByFnType: TypeAlias = Callable[
 """
 Type alias for originator functions.
 
-Signature: 
-    (context_manager: MultiroundContextManager, 
-     kwargs: dict[str, Any] | None) -> CustomResponseStr | Iterator[T]
+Signature:
+    `(context_manager: MultiroundContextManager, 
+     kwargs: dict[str, Any] | None) -> CustomResponseStr | Iterator[T]`
 """
 
 GetToolsFnType: TypeAlias = Callable[[list[T]], list[V]]
@@ -170,7 +185,7 @@ GetToolsFnType: TypeAlias = Callable[[list[T]], list[V]]
 Type alias for tool extraction functions.
 
 Signature: 
-    (chunks: list[T]) -> list[V]
+    `(chunks: list[T]) -> list[V]`
 """
 
 
@@ -205,7 +220,7 @@ CustomChunkToStrFnType: TypeAlias = Callable[[T], DeltaStr]
 Type alias for chunk conversion functions.
 
 Signature:
-    (chunk: T) -> DeltaStr
+    `(chunk: T) -> DeltaStr`
 """
 
 CustomStreamHookFnType: TypeAlias = Callable[[CustomHookArgs[T, U, X, Y]], None]
@@ -213,7 +228,7 @@ CustomStreamHookFnType: TypeAlias = Callable[[CustomHookArgs[T, U, X, Y]], None]
 Type alias for stream hook functions.
 
 Signature:
-    (args: CustomHookArgs[T]) -> None
+    `(args: CustomHookArgs[T]) -> None`
 """
 
 
@@ -228,8 +243,8 @@ CustomToolHookFnType: TypeAlias = Callable[
 Type alias for tool hook functions.
 
 Signature: 
-    (args: CustomHookArgs[T, U], 
-     tools: list[V]) -> ToolCallExtension | ToolCallChainExtension[T] | None
+    `(args: CustomHookArgs[T, U], 
+     tools: list[V]) -> ToolCallExtension | ToolCallChainExtension[T] | None`
 """
 
 CustomCaptureFinishFnType: TypeAlias = Callable[[T], bool]
@@ -237,7 +252,7 @@ CustomCaptureFinishFnType: TypeAlias = Callable[[T], bool]
 Type alias for stream completion detection.
 
 Signature: 
-    (chunk: T) -> bool
+    `(chunk: T) -> bool`
 """
 
 

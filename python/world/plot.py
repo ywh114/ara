@@ -17,18 +17,51 @@
 #  along with this program. If not, see <http://www.gnu.org/licenses/>.    #
 #                                                                          #
 ############################################################################
-import random
-from typing import Hashable
-from uuid import UUID
+from world.character.character_class import Character
 
 
-def uuid4_from_seed(seed: Hashable) -> UUID:
-    """
-    Generate a deterministic UUIDv4 from a seed value.
+class PlotMarcher:  # FIXME: Implement.
+    def __init__(
+        self,
+        character_pool: set[Character],
+        starting_characters: set[Character],
+    ) -> None:
+        self._character_pool = character_pool
+        self._starting_characters = starting_characters
 
-    :param seed: A hashable value used to seed the random number generator
-    :return: A deterministic UUIDv4 generated from the seed
-    """
-    random.seed(hash(seed))
-    random_bytes = bytes(random.getrandbits(8) for _ in range(16))
-    return UUID(bytes=random_bytes, version=4)
+    @property
+    def character_pool(self) -> set[Character]:
+        # TODO:
+        return self._character_pool
+
+    @property
+    def starting_characters(self) -> set[Character]:
+        # TODO:
+        return self._starting_characters
+
+    @property
+    def scene_outcomes(self) -> list[str]:
+        # TODO:
+        return ['debug 0', 'debug 1']
+
+    @property
+    def scene_outcomes_pretty(self) -> str:
+        return '\n'.join(f'{i}, {s}' for i, s in enumerate(self.scene_outcomes))
+
+    @property
+    def scene_tone(self) -> str:
+        # TODO:
+        return 'debug'
+
+    @property
+    def zeitgeist(self) -> str:
+        # TODO:
+        return 'debug'
+
+    @property
+    def as_tool_contents(self) -> str:
+        # TODO:
+        return (
+            'I am debugging. Cycle between characters/narrator and only exit when the user (me, doing the debugging) mentions exiting to you.\n'
+            'Debug plot: the characters are conversing. Make sure everyone has a chance to speak. Player goes first.\n'
+        )

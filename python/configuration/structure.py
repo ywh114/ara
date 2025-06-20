@@ -1,15 +1,31 @@
 #!/usr/bin/env python3
-# TODO: Move imports to ` __init__.py`
+############################################################################
+#                                                                          #
+#  Copyright (C) 2025                                                      #
+#                                                                          #
+#  This program is free software: you can redistribute it and/or modify    #
+#  it under the terms of the GNU General Public License as published by    #
+#  the Free Software Foundation, either version 3 of the License, or       #
+#  (at your option) any later version.                                     #
+#                                                                          #
+#  This program is distributed in the hope that it will be useful,         #
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of          #
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the           #
+#  GNU General Public License for more details.                            #
+#                                                                          #
+#  You should have received a copy of the GNU General Public License       #
+#  along with this program. If not, see <http://www.gnu.org/licenses/>.    #
+#                                                                          #
+############################################################################
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
     TypeAlias,
     TypeVar,
 )
-from configuration.settings import Settings, DefaultSettings
 
 import xdg_base_dirs as xdg
-
+from configuration.settings import DefaultSettings, Settings
 
 V = TypeVar('V', bound='InstallationSettings')
 W = TypeVar('W', bound='DefaultInstallationSettings')
@@ -37,7 +53,7 @@ class GlobalInfo:
     :var config_path: Main configuration file path.
     """
 
-    prefix = 'ara'
+    prefix = 'j50'
     config_dir: Path = xdg.xdg_config_home().joinpath(prefix)
     config_path: Path = config_dir.joinpath(prefix).with_suffix(_sfx)
 
@@ -186,12 +202,10 @@ class DefaultGameSettings(DefaultSettings[X]):
     database_embedding_model_embedding_fn_kwargs: dict[
         str, bool | int | float | str
     ] = dfac({})
-    database_reranker_model_name: str = 'BAAI/bge-reranker-base'
+    database_reranker_model_name: str = ''  # 'BAAI/bge-reranker-base'
     database_reranker_model_type: str = 'CustomHuggingFace'
-    database_reranker_model_instruction_aware: bool = True
-    database_reranker_model_instruction_aware_fstring: str = (
-        '<Instruct>: {task}\n<Query>: {query}\n<Document>: {doc}'
-    )
+    database_reranker_model_instruction_aware: bool = False
+    database_reranker_model_instruction_aware_fstring: str = ''
     database_reranker_model_kwargs: dict[str, str] = dfac({})
     database_reranker_model_tokenizer_kwargs: dict[str, str] = dfac({})
     database_reranker_model_embedding_fn_kwargs: dict[

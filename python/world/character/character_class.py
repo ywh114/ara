@@ -1,13 +1,31 @@
 #!/usr/bin/env python3
+############################################################################
+#                                                                          #
+#  Copyright (C) 2025                                                      #
+#                                                                          #
+#  This program is free software: you can redistribute it and/or modify    #
+#  it under the terms of the GNU General Public License as published by    #
+#  the Free Software Foundation, either version 3 of the License, or       #
+#  (at your option) any later version.                                     #
+#                                                                          #
+#  This program is distributed in the hope that it will be useful,         #
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of          #
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the           #
+#  GNU General Public License for more details.                            #
+#                                                                          #
+#  You should have received a copy of the GNU General Public License       #
+#  along with this program. If not, see <http://www.gnu.org/licenses/>.    #
+#                                                                          #
+############################################################################
 # TODO: Add Character to __init__.py
 from dataclasses import dataclass
-from typing import Any, Self
+from typing import Any, Self, override
 from uuid import UUID
 
-from world.character.card import CardHolder
-from world.character.memory import Memory
 from llm.utils.context_manager import Context
 from utils.bars import BarManager
+from world.character.card import CardHolder
+from world.character.memory import Memory
 from world.importance import ImportanceEnum
 
 
@@ -128,3 +146,7 @@ class Character:
     def __eq__(self, value: Any) -> bool:
         assert isinstance(value, Character)
         return self.id == value.id
+
+    @override
+    def __repr__(self) -> str:
+        return f'<{self.__class__} {self.name}>'

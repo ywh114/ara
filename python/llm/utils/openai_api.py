@@ -1,4 +1,22 @@
 #!/usr/bin/env python3
+############################################################################
+#                                                                          #
+#  Copyright (C) 2025                                                      #
+#                                                                          #
+#  This program is free software: you can redistribute it and/or modify    #
+#  it under the terms of the GNU General Public License as published by    #
+#  the Free Software Foundation, either version 3 of the License, or       #
+#  (at your option) any later version.                                     #
+#                                                                          #
+#  This program is distributed in the hope that it will be useful,         #
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of          #
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the           #
+#  GNU General Public License for more details.                            #
+#                                                                          #
+#  You should have received a copy of the GNU General Public License       #
+#  along with this program. If not, see <http://www.gnu.org/licenses/>.    #
+#                                                                          #
+############################################################################
 # TODO: Rewrite. Do not thread generics.
 from functools import partial
 from typing import (
@@ -10,13 +28,11 @@ from typing import (
     Literal,
     NamedTuple,
     TypeAlias,
-    TypeVar,
     TypedDict,
+    TypeVar,
     overload,
     override,
 )
-
-from openai.types.shared_params.function_definition import FunctionDefinition
 
 from llm.utils.context_manager import MultiroundContextManager
 from llm.utils.stream import (
@@ -25,14 +41,14 @@ from llm.utils.stream import (
     CustomCaptureFinish,
     CustomChunkToStr,
     CustomHookArgs,
-    CustomToolHook,
     CustomResponseStr,
     CustomStreamHandler,
     CustomStreamHook,
+    CustomToolHook,
     DeltaStr,
     ReasoningContentStr,
-    no_tool_hook,
     no_stream_hook,
+    no_tool_hook,
 )
 from openai import NotGiven, OpenAI, Stream
 from openai.types.chat import (
@@ -46,6 +62,7 @@ from openai.types.chat import (
 )
 from openai.types.chat.chat_completion_message_tool_call import Function
 from openai.types.chat.completion_create_params import ResponseFormat
+from openai.types.shared_params.function_definition import FunctionDefinition
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -58,6 +75,14 @@ Y = TypeVar('Y')
 
 
 class ToolsHookPair(NamedTuple):
+    """
+    Tuple pairing tool definitions with their corresponding hook function.
+
+    :param tools: List of function definitions for tools.
+    :param hook: Hook function to process tool calls.
+    :ivar toolparams: Tools in `ChatCompletionToolParam` format.
+    """
+
     tools: list[FunctionDefinition]
     hook: CustomToolHook
 
@@ -66,18 +91,28 @@ class ToolsHookPair(NamedTuple):
         return [{'type': 'function', 'function': tool} for tool in self.tools]
 
 
-FinishReason: TypeAlias = Literal[
+FinishReason: TypeAlias = Literal[  # TODO: Use.
     'stop', 'length', 'tool_calls', 'content_filter', 'function_call'
 ]
 
 
 @CustomCaptureFinish[ChatCompletionChunk]
 def capture_finish(chunk: ChatCompletionChunk) -> bool:
+    """
+    Determine if a chunk indicates the end of a stream.
+
+    :param chunk: Stream chunk from OpenAI API.
+    :returns: True if stream should finish, False otherwise.
+    """
     # TODO: Handle refusals/connection errors.
-    return bool(chunk.choices[0].finish_reason)
+    if finish_reason := chunk.choices[0].finish_reason:
+        logger.debug(f'Finish reason: {finish_reason}')
+    return bool(finish_reason)
 
 
 class ExtraPayloadContents(TypedDict):
+    """Additional parameters for chat completion requests."""
+
     frequency_penalty: float | NotGiven
     max_tokens: int | NotGiven
     presence_penalty: float | NotGiven
@@ -107,35 +142,48 @@ _completion_kwargs_default: ExtraPayloadContents = {
 
 
 def _payload_from_partial(
-    part: dict[str, Any] | ExtraPayloadContents | None = None,
-    orig: ExtraPayloadContents = _completion_kwargs_default,
+    p: dict[str, Any] | ExtraPayloadContents | None = None,
+    d: ExtraPayloadContents = _completion_kwargs_default,
 ) -> ExtraPayloadContents:
-    if part is None:
-        part = {}
+    """
+    Merge partial payload with default values.
+
+    :param part: Partial payload values.
+    :param orig: Default values to fall back to.
+    :returns: Merged payload dictionary.
+    """
+    if p is None:
+        p = {}
     return {
-        'frequency_penalty': part.setdefault('frequency_penalty', NotGiven())
-        or orig['frequency_penalty'],
-        'max_tokens': part.setdefault('max_tokens', NotGiven())
-        or orig['max_tokens'],
-        'presence_penalty': part.setdefault('presence_penalty', NotGiven())
-        or orig['presence_penalty'],
-        'response_format': part.setdefault('response_format', NotGiven())
-        or orig['response_format'],
-        'stop': part.setdefault('stop', NotGiven()) or orig['stop'],
-        'stream_options': part.setdefault('stream_options', NotGiven())
-        or orig['stream_options'],
-        'temperature': part.setdefault('temperature', NotGiven())
-        or orig['temperature'],
-        'top_p': part.setdefault('top_p', NotGiven()) or orig['top_p'],
-        'tools': part.setdefault('tools', NotGiven()) or orig['tools'],
-        'tool_choice': part.setdefault('tool_choice', NotGiven())
-        or orig['tool_choice'],
-        'logprobs': part.setdefault('logprobs', NotGiven()) or orig['logprobs'],
+        'frequency_penalty': p.get('frequency_penalty', d['frequency_penalty']),
+        'max_tokens': p.get('max_tokens', d['max_tokens']),
+        'presence_penalty': p.get('presence_penalty', d['presence_penalty']),
+        'response_format': p.get('response_format', d['response_format']),
+        'stop': p.get('stop', d['stop']),
+        'stream_options': p.get('stream_options', d['stream_options']),
+        'temperature': p.get('temperature', d['temperature']),
+        'top_p': p.get('top_p', d['top_p']),
+        'tools': p.get('tools', d['tools']),
+        'tool_choice': p.get('tool_choice', d['tool_choice']),
+        'logprobs': p.get('logprobs', d['logprobs']),
     }
 
 
 class LLMProfile(Generic[T, U, X, Y]):
-    """Profile for OpenAI-style API."""
+    """
+    Profile configuration for OpenAI-style API endpoints.
+
+    :param key: Unique identifier for the profile.
+    :param api_key: API key for authentication.
+    :param base_url: Base URL for API endpoint.
+    :param model: Model name to use.
+    :param capture_finish: Function to detect stream completion.
+    :param stream_hook: Hook to process streaming chunks.
+    :param tool_hook: Hook to process tool calls.
+    :param completion_kwargs: Default parameters for completions.
+    :param openai_kwargs: Additional parameters for OpenAI client.
+    :param reasoning_field_name: Field name for reasoning content.
+    """
 
     def __init__(
         self,
@@ -174,6 +222,12 @@ class LLMWrapper(
         ],
     ]
 ):
+    """
+    Container for LLM profiles with completion methods.
+
+    :param profiles: Initial profiles to register.
+    """
+
     def __init__(
         self,
         *profiles: LLMProfile[
@@ -239,7 +293,14 @@ class LLMWrapper(
         | None = None,
         logprobs: bool | NotGiven | None = None,
         specific_tools: list[ChatCompletionToolParam] | NotGiven | None = None,
-        specific_tool_hook: CustomToolHook | NotGiven | None = None,
+        specific_tool_hook: CustomToolHook[
+            ChatCompletionChunk,
+            T,
+            ChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+        ]
+        | NotGiven
+        | None = None,
     ) -> CustomResponseStr: ...
 
     @overload
@@ -267,7 +328,12 @@ class LLMWrapper(
         | None = None,
         logprobs: bool | NotGiven | None = None,
         specific_tools: list[ChatCompletionToolParam] | NotGiven | None = None,
-        specific_tool_hook: CustomToolHook  # TODO: Generics
+        specific_tool_hook: CustomToolHook[
+            ChatCompletionChunk,
+            T,
+            ChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+        ]
         | NotGiven
         | None = None,
     ) -> CustomStreamHandler[ChatCompletionChunk]: ...
@@ -296,8 +362,25 @@ class LLMWrapper(
         | None = None,
         logprobs: bool | NotGiven | None = None,
         specific_tools: list[ChatCompletionToolParam] | NotGiven | None = None,
-        specific_tool_hook: CustomToolHook | NotGiven | None = None,
+        specific_tool_hook: CustomToolHook[
+            ChatCompletionChunk,
+            T,
+            ChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+        ]
+        | NotGiven
+        | None = None,
     ) -> str | CustomStreamHandler[ChatCompletionChunk]:
+        """
+        Execute chat completion with context and tool handling.
+
+        :param profile_key: Key of LLM profile to use.
+        :param system_prompt: System-level instructions.
+        :param context_manager: Conversation history manager.
+        :param stream: Whether to use streaming mode.
+        :param kwargs: Additional completion parameters.
+        :returns: Response string or stream handler.
+        """
         profile = self.profiles[profile_key]
         instance_completion_kwargs: ExtraPayloadContents = {
             'frequency_penalty': frequency_penalty or NotGiven(),
@@ -326,13 +409,22 @@ class LLMWrapper(
             completion_kwargs['tools'] = specific_tools or NotGiven()
 
         logger.debug(
-            f'Sent request to {profile.client.base_url} {profile.model}.'
+            f'Sent request to {profile.client.base_url} :: {profile.model}.'
         )
+        if (
+            context_manager.head is not None
+            and 'content' in context_manager.head
+            and context_manager.head['content'] is not None
+        ):
+            assert isinstance(context_manager.head['content'], str)
+            logger.debug(
+                f'Top of stack: {context_manager.head["content"][:200]}'
+            )
         response = profile.client.chat.completions.create(
             model=profile.model,
             messages=[
                 {'role': 'system', 'content': system_prompt},
-                *context_manager.tolist(),
+                *context_manager.to_list(),
             ],
             stream=stream,
             **completion_kwargs,
@@ -424,6 +516,13 @@ class LLMWrapper(
     def _chunk_to_str(
         chunk: ChatCompletionChunk, reasoning_field_name: str
     ) -> DeltaStr:
+        """
+        Convert stream chunk to `DeltaStr`.
+
+        :param chunk: Stream chunk from API.
+        :param reasoning_field_name: Field name for reasoning content.
+        :returns: Processed content as DeltaStr.
+        """
         cd = chunk.choices[0].delta
 
         # For reasoning models.
@@ -467,6 +566,16 @@ class LLMWrapper(
         stream: bool,
         kwargs: ExtraPayloadContents,
     ) -> CalledByFnType[ChatCompletionChunk]:
+        """
+        Create a reusable completion function closure.
+
+        :param profile_key: Key of LLM profile to use.
+        :param system_prompt: System-level instructions.
+        :param stream: Whether to use streaming mode.
+        :param kwargs: Base completion parameters.
+        :returns: Configured completion function.
+        """
+
         def _completion_function(
             context_manager: MultiroundContextManager,
             _mask_kwargs: dict[str, Any] | None = None,
@@ -513,6 +622,13 @@ def find_last_tool(
     | ChatCompletionMessageToolCall
     | None
 ):
+    """
+    Locate the last tool call in a stream of chunks.
+
+    :param chunks: Stream chunks to analyze.
+    :param nonu: Whether to return position index.
+    :returns: Tool call and optional position, or None.
+    """
     deltas = [c.choices[0].delta for c in chunks]
 
     last_tool_start_index = len(deltas) - 1
@@ -560,6 +676,12 @@ def find_last_tool(
 def find_all_tools(
     chunks: list[ChatCompletionChunk] | ChatCompletionMessage,
 ) -> list[ChatCompletionMessageToolCall]:
+    """
+    Extract all tool calls from message or chunks.
+
+    :param chunks: Message or chunk list to analyze.
+    :returns: List of extracted tool calls.
+    """
     if isinstance(chunks, list):
         tools, n = [], len(chunks)
         while (lc := find_last_tool(chunks[:n], False)) is not None:
@@ -567,5 +689,9 @@ def find_all_tools(
             tools += [tool]
     else:
         tools = chunks.tool_calls or []
+
+    logger.debug(
+        'Found tools:\n' + '\n'.join(str(tool.function) for tool in tools)
+    )
 
     return tools

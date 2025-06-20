@@ -1,4 +1,22 @@
 #!/usr/bin/env python3
+############################################################################
+#                                                                          #
+#  Copyright (C) 2025                                                      #
+#                                                                          #
+#  This program is free software: you can redistribute it and/or modify    #
+#  it under the terms of the GNU General Public License as published by    #
+#  the Free Software Foundation, either version 3 of the License, or       #
+#  (at your option) any later version.                                     #
+#                                                                          #
+#  This program is distributed in the hope that it will be useful,         #
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of          #
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the           #
+#  GNU General Public License for more details.                            #
+#                                                                          #
+#  You should have received a copy of the GNU General Public License       #
+#  along with this program. If not, see <http://www.gnu.org/licenses/>.    #
+#                                                                          #
+############################################################################
 # Requires transformers>=4.51.0
 # XXX: Demo only.
 # See https://huggingface.co/Qwen/Qwen3-Reranker-0.6B.
@@ -7,8 +25,8 @@ from typing import Any, override
 
 import torch
 from transformers import (
-    AutoModelForSequenceClassification,
     AutoModelForCausalLM,
+    AutoModelForSequenceClassification,
     AutoTokenizer,
 )
 from transformers.tokenization_utils_base import BatchEncoding
@@ -70,7 +88,7 @@ class CustomHuggingFaceRerankerFunction(RerankerFunction):
         :key max_length: Maximum sequence length (default: 8192).
         :raises ValueError: On unsupported device specification.
         """
-        self.device = kwargs.setdefault('device', 'cpu')
+        self.device = kwargs.get('device', 'cpu')
         if self.device not in self.supported_devices:
             raise ValueError(
                 f'Device not supported: {self.device}. '
@@ -88,7 +106,7 @@ class CustomHuggingFaceRerankerFunction(RerankerFunction):
             model_path, **tokenizer_kwargs
         )
 
-        self.max_length = kwargs.setdefault('max_length', 512)
+        self.max_length = kwargs.get('max_length', 512)
 
     @override
     def __call__(
@@ -160,14 +178,12 @@ class CustomHuggingFace4Qwen3RerankerFunction(RerankerFunction):
         :param model_kwargs: Keyword arguments for model loading.
         :param tokenizer_kwargs: Keyword arguments for tokenizer loading.
         :key device: Computation device ('cpu' or 'cuda').
-        :key prefix: Custom system prompt prefix
-            (default: class default_prefix).
-        :key suffix: Custom assistant prompt suffix
-            (default: class default_suffix).
+        :key prefix: Custom system prompt prefix (d: class default_prefix).
+        :key suffix: Custom assistant prompt suffix (d: class default_suffix).
         :key max_length: Maximum sequence length (default: 8192).
         :raises ValueError: On unsupported device specification.
         """
-        self.device = kwargs.setdefault('device', 'cpu')
+        self.device = kwargs.get('device', 'cpu')
         if self.device not in self.supported_devices:
             raise ValueError(
                 f'Device not supported: {self.device}. '
@@ -189,8 +205,8 @@ class CustomHuggingFace4Qwen3RerankerFunction(RerankerFunction):
             'Asking-to-pad-a-fast-tokenizer'
         ] = True  # Disable padding warning for fast tokenizers.
 
-        prefix_text = kwargs.setdefault('prefix', self.default_prefix)
-        suffix_text = kwargs.setdefault('prefix', self.default_suffix)
+        prefix_text = kwargs.get('prefix', self.default_prefix)
+        suffix_text = kwargs.get('prefix', self.default_suffix)
         self.prefix_tokens = self.tokenizer.encode(
             prefix_text, add_special_tokens=False
         )
@@ -198,7 +214,7 @@ class CustomHuggingFace4Qwen3RerankerFunction(RerankerFunction):
             suffix_text, add_special_tokens=False
         )
 
-        self.max_length = kwargs.setdefault('max_length', 8192)
+        self.max_length = kwargs.get('max_length', 8192)
 
         self.actual_max_length = (
             self.max_length - len(self.prefix_tokens) - len(self.suffix_tokens)

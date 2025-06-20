@@ -1,4 +1,22 @@
 #!/usr/bin/env python3
+############################################################################
+#                                                                          #
+#  Copyright (C) 2025                                                      #
+#                                                                          #
+#  This program is free software: you can redistribute it and/or modify    #
+#  it under the terms of the GNU General Public License as published by    #
+#  the Free Software Foundation, either version 3 of the License, or       #
+#  (at your option) any later version.                                     #
+#                                                                          #
+#  This program is distributed in the hope that it will be useful,         #
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of          #
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the           #
+#  GNU General Public License for more details.                            #
+#                                                                          #
+#  You should have received a copy of the GNU General Public License       #
+#  along with this program. If not, see <http://www.gnu.org/licenses/>.    #
+#                                                                          #
+############################################################################
 from dataclasses import fields
 from pathlib import Path
 from typing import (
@@ -59,7 +77,7 @@ class Settings:
         :param conf: Dictionary of configuration values.
         :return: Settings instance populated from dictionary.
         :raises ConfigurationError: If dictionary structure does not match
-            settings field types or constraints.
+        settings field types or constraints.
         """
         # Build the object.
         settings = cls(
@@ -111,7 +129,6 @@ class DefaultSettings(Settings, Generic[T]):
         Extract concrete settings type from generic parameter.
 
         :return: The concrete settings class type.
-        :rtype: type[T]
         :raises ConfigurationError: If constraints not followed.
         """
         for base in getattr(cls, '__orig_bases__', ()):
@@ -130,6 +147,5 @@ class DefaultSettings(Settings, Generic[T]):
 
         :param conf: Configuration dictionary to overlay on defaults.
         :return: Combined settings instance.
-        :rtype: T
         """
         return cls._get_base().load_dict(cls().export_dict() | conf)

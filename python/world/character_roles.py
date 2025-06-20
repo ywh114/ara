@@ -1,4 +1,22 @@
 #!/usr/bin/env python3
+############################################################################
+#                                                                          #
+#  Copyright (C) 2025                                                      #
+#                                                                          #
+#  This program is free software: you can redistribute it and/or modify    #
+#  it under the terms of the GNU General Public License as published by    #
+#  the Free Software Foundation, either version 3 of the License, or       #
+#  (at your option) any later version.                                     #
+#                                                                          #
+#  This program is distributed in the hope that it will be useful,         #
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of          #
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the           #
+#  GNU General Public License for more details.                            #
+#                                                                          #
+#  You should have received a copy of the GNU General Public License       #
+#  along with this program. If not, see <http://www.gnu.org/licenses/>.    #
+#                                                                          #
+############################################################################
 import json
 import os
 from enum import StrEnum, auto
@@ -15,67 +33,17 @@ from llm.utils.stream import (
     ReasoningContentStr,
 )
 from openai.types.chat import (
-    ChatCompletionAssistantMessageParam,
     ChatCompletionChunk,
     ChatCompletionMessage,
     ChatCompletionMessageToolCall,
-    ChatCompletionUserMessageParam,
 )
-from openai.types.chat.chat_completion_message_tool_call import Function
-from utils.ansi import DARKGREY, END, GREEN
+from utils.ansi import BLUE, END, GREEN
 from utils.logger import get_logger
 from utils.timestamp import timestamp
 from world.character.character_class import Character
+from world.plot import PlotMarcher
 
 logger = get_logger(__name__)
-
-
-# TODO: Move to plot module.
-class Plot:  # XXX: DEMO ONLY.
-    def __init__(
-        self,
-        character_pool: set[Character],
-        starting_characters: set[Character],
-    ) -> None:
-        self._character_pool = character_pool
-        self._starting_characters = starting_characters
-
-    @property
-    def character_pool(self) -> set[Character]:
-        # TODO:
-        return self._character_pool
-
-    @property
-    def starting_characters(self) -> set[Character]:
-        # TODO:
-        return self._starting_characters
-
-    @property
-    def scene_outcomes(self) -> list[str]:
-        # TODO:
-        return ['debug 0', 'debug 1']
-
-    @property
-    def scene_outcomes_pretty(self) -> str:
-        return '\n'.join(f'{i}, {s}' for i, s in enumerate(self.scene_outcomes))
-
-    @property
-    def scene_tone(self) -> str:
-        # TODO:
-        return 'debug'
-
-    @property
-    def zeitgeist(self) -> str:
-        # TODO:
-        return 'debug'
-
-    @property
-    def as_tool_contents(self) -> str:
-        # TODO:
-        return (
-            'I am debugging. Cycle between characters/narrator and only exit when the user (me, doing the debugging) mentions exiting to you.\n'
-            'Debug plot: the characters are conversing. Make sure everyone has a chance to speak. Player goes first.\n'
-        )
 
 
 # TODO: Move to scene module.
@@ -101,7 +69,7 @@ def update_text_hook(  # XXX: DEMO ONLY
 ) -> None:
     head = args.head_as_str
     if isinstance(head, ReasoningContentStr):
-        print(DARKGREY + args.head_as_str + END, end='', flush=True)
+        print(BLUE + args.head_as_str + END, end='', flush=True)
     elif isinstance(head, ContentStr):
         print(GREEN + args.head_as_str + END, end='', flush=True)
 
@@ -190,12 +158,6 @@ class RoleProfiles:
 
         self.llm = GameLLM(*self.profiles)
 
-    def get_handover_prompt(self, _: Character) -> str:
-        return ''
-
-    def get_handover_narrator_prompt(self, _: Character) -> str:
-        return ''
-
     def get_user_handover_scratch_prompt(self, character: Character) -> str:
         return (
             f'{character.name}, follow the instructions in your system prompt.'
@@ -208,12 +170,6 @@ class RoleProfiles:
             f'{character.name}, the current conversation has ended. Follow the '
             'instructions in your system prompt.'
         )
-
-    def get_user_handover_plot_fetcher_prompt(self) -> str:
-        return ''
-
-    def get_user_handover_orchestrator_prompt(self) -> str:
-        return 'Get the plot and follow the instructions in your system prompt.'
 
     def get_character_system_prompt(
         self, character: Character, directive: str
@@ -274,7 +230,9 @@ Clean up and only keep what will be useful to carry over into future conversatio
         player_char: Character,
         narrator_char: Character,
         directive: str,
-        plot: Plot,
+        plot: PlotMarcher,
+        here_chars: set[Character],
+        away_chars: set[Character],
     ) -> str:
         player_name = player_char.name
         narrator_name = narrator_char.name
@@ -283,6 +241,10 @@ Clean up and only keep what will be useful to carry over into future conversatio
 ## Core Purpose
 You are the {narrator_name}, the Narrator of the story.
 The player is {player_name}.
+DO NOT prefix with `<{narrator_name}>:`, the system will add these automatically.
+
+Characters present in the scene: {here_chars}
+Characters NOT present in the scene: {away_chars}
 
 ## Narrative Rules
 1. **Content Scope**:
@@ -304,23 +266,13 @@ Additional directives: {directive or None}.
 - Never advance plot through character dialogue.
 - Never describe active character actions (reserved for character agents).
 - No meta-commentary about game mechanics.
-
-## Examples
-### Environment
-"The warehouse air hangs thick with the scent of rust and old tobacco, each footstep echoing like a gunshot in the cavernous space."
-
-### Time Transition
-"Three whiskey glasses later, the bar's neon sign flickers off, plunging the booth into smoky darkness."
-
-### Internal Monologue
-"{player_name} wonders if the envelope contains a threat or a promise - their fingers hover at the seal."
-
-### Scene Transition
-"The train whistle cuts through the station as the stranger melts into the crowd, leaving only a crumpled ticket behind."
 """
 
     def get_orchestrator_next_round_system_prompt(
-        self, player_char: Character, narrator_char: Character, plot: Plot
+        self,
+        player_char: Character,
+        narrator_char: Character,
+        plot: PlotMarcher,
     ) -> str:
         player_name = player_char.name
         narrator_name = narrator_char.name
@@ -368,30 +320,19 @@ The tone of the current scene is: {plot.scene_tone}.
 ["Ask about the dinner.", "Express disinterest."]
 ["Go to the meeting room.", "Go to the break room.", "Go to the restroom."]"""
 
-    def get_plot_fetcher_fake_tool_calls(
-        self,
-        fake_tool_call_id: str,
-    ) -> list[ChatCompletionMessageToolCall]:
-        return [
-            ChatCompletionMessageToolCall(
-                id=fake_tool_call_id,
-                function=Function(name='get_plot', arguments='{}'),
-                type='function',
-            )
-        ]
-
 
 Orchestrator: TypeAlias = Callable[
     [
         RoleProfiles,
-        Plot,
+        PlotMarcher,
         MultiroundContextManager,
         set[Character],
         set[Character],
         Character,
         Character,
     ],
-    tuple[Character, str, list[str], set[Character], set[Character]] | None,
+    tuple[Character, str, list[str], set[Character], set[Character], bool]
+    | None,
 ]
 
 
@@ -401,6 +342,7 @@ class NextRoundOutcomeDict(TypedDict):
     suggestions: list[str]
     exit_characters: list[str]
     enter_characters: list[str]
+    edit_scene_environment: bool
     end_scene: bool
 
 
@@ -422,10 +364,13 @@ class NextRoundCapture:
         args_dict: dict[str, Any] = json.loads(tool_args)
         self.outcome_dict = {
             'next_character': args_dict['next_character'],
-            'directive': args_dict.setdefault('directive', ''),
-            'suggestions': args_dict.setdefault('suggestions', []),
+            'directive': args_dict.get('directive', ''),
+            'suggestions': args_dict.get('suggestions', []),
             'enter_characters': args_dict['enter_characters'],
             'exit_characters': args_dict['exit_characters'],
+            'edit_scene_environment': args_dict.get(
+                'edit_scene_environment', False
+            ),
             'end_scene': args_dict['end_scene'],
         }
         return ''
@@ -433,59 +378,61 @@ class NextRoundCapture:
     def outcome(
         self, chars: Iterable[Character]
     ) -> (
-        tuple[Character, str, list[str], set[Character], set[Character]] | None
+        tuple[Character, str, list[str], set[Character], set[Character], bool]
+        | None
     ):
         if self.outcome_dict is None:
-            raise RuntimeError('Not yet run')  # TODO: Fill in.
+            raise RuntimeError(f'{self} not yet run!')  # TODO: Fill in.
 
+        # End scene -> None
         if self.outcome_dict['end_scene']:
             return None
 
-        print(self.outcome_dict)
-
-        the_char = _name_to_char(self.outcome_dict['next_character'], chars)
+        next_char = _name_to_char(self.outcome_dict['next_character'], chars)
         try:
-            the_enter_chars = {
+            entering_chars = {
                 _name_to_char(name, chars)
                 for name in self.outcome_dict['enter_characters']
             }
         except RuntimeError:
-            # TODO: Better prompt.
-            the_enter_chars = set()
+            # TODO: Better prompt?
+            entering_chars = set()
         try:
-            the_exit_chars = {
+            exiting_chars = {
                 _name_to_char(name, chars)
                 for name in self.outcome_dict['exit_characters']
             }
         except RuntimeError:
-            # TODO: Better prompt.
-            the_exit_chars = set()
+            # TODO: Better prompt?
+            exiting_chars = set()
 
         return (
-            the_char,
+            next_char,
             self.outcome_dict['directive'],
             self.outcome_dict['suggestions'],
-            the_enter_chars,
-            the_exit_chars,
+            entering_chars,
+            exiting_chars,
+            self.outcome_dict['edit_scene_environment'],
         )
 
 
 def get_next_round_settings(
     rp: RoleProfiles,
-    plot: Plot,
+    plot: PlotMarcher,
     cm0: MultiroundContextManager,
-    chars: set[Character],
-    off_scene_chars: set[Character],
+    here_chars: set[Character],
+    away_chars: set[Character],
     player_char: Character,
     narrator_char: Character,
-) -> tuple[Character, str, list[str], set[Character], set[Character]] | None:
+) -> (
+    tuple[Character, str, list[str], set[Character], set[Character], bool]
+    | None
+):
+    logger.debug(f'Control handed to orchestrator {get_next_round_settings}')
     nrc = NextRoundCapture()
 
-    list_chars = [char.name for char in chars]
-    list_off_scene_chars = [char.name for char in off_scene_chars]
-
-    print(list_chars)
-    print(list_off_scene_chars)
+    list_here_chars = [char.name for char in here_chars]
+    list_away_chars = [char.name for char in away_chars]
 
     next_round = GameLLM[Character].create_tool(
         name='next_round',
@@ -498,7 +445,7 @@ Also decide on what characters enter/exit the scene.
         properties={
             'next_character': {
                 'type': 'string',
-                'enum': list_chars + [narrator_char.name],
+                'enum': list_here_chars + [narrator_char.name],
                 'description': 'The character to act next.',
             },
             'directive': {
@@ -513,13 +460,18 @@ Also decide on what characters enter/exit the scene.
             },
             'enter_characters': {
                 'type': 'array',
-                'items': {'type': 'string', 'enum': list_off_scene_chars},
+                'items': {'type': 'string', 'enum': list_away_chars},
                 'description': 'List of characters to enter the scene.',
             },
             'exit_characters': {
                 'type': 'array',
-                'items': {'type': 'string', 'enum': list_chars},
+                'items': {'type': 'string', 'enum': list_here_chars},
                 'description': 'List of characters to exit the scene.',
+            },
+            'edit_scene_environment': {
+                'type': 'boolean',
+                'description': 'True if characters or the plot alter the '
+                'environment of the scene. [Currently unimplemented]',
             },
             'end_scene': {
                 'type': 'boolean',
@@ -542,52 +494,29 @@ Also decide on what characters enter/exit the scene.
 
     orchestrator_tools = ToolsHookPair(tools=[next_round], hook=next_round_hook)
 
-    TMP: Context = [
-        ChatCompletionUserMessageParam(
-            role='user',
-            content='What is the current `Plot`?',
-            name='System',
-        ),
-        ChatCompletionAssistantMessageParam(
-            role='assistant',
-            content='Plot:\n'
-            + plot.as_tool_contents
-            + f'\nCharacters present: {list_chars}',
-            name='System',
-        ),
+    plot_content = f"""Plot:
+{plot.as_tool_contents}
+
+Characters currently here: {list_here_chars}
+Characters currently away: {list_away_chars}
+"""
+    injected: Context = [
+        {  # TODO: Also inject `Scene`
+            'role': 'user',
+            'content': 'What is the current `Plot`?',
+            'name': 'System',
+        },
+        {
+            'role': 'assistant',
+            'content': plot_content,
+            'name': 'System',
+        },
     ]
 
-    with MultiroundContextManager(injected_context=TMP, tmp_from=cm0) as cm1:
-        head_role = 'system' if cm1.head is None else cm1.head['role']
-        # Padding.
-        if head_role == 'assistant' or head_role == 'system':
-            cm1.user_message(
-                rp.get_user_handover_plot_fetcher_prompt(),
-                name='System',
-                suppress_decorations=True,
-            )
-
-        # fake_tool_call_id = str(uuid4())
-        # cm1.assistant_message(
-        #    '',
-        #    tool_calls=rp.get_plot_fetcher_fake_tool_calls(fake_tool_call_id),
-        #    name='Plot Fetcher',
-        # )
-        # cm1.tool_message(
-        #    plot.as_tool_contents,
-        #    tool_call_id=fake_tool_call_id,
-        # )
-        # cm1.assistant_message(
-        #    f'Current characters present: {repr_chars}.',
-        #    tool_calls=[],
-        #    name='Plot Fetcher',
-        # )
-        # pp(cm1.injected_context + cm1.context)
-        # pp(repr_chars)
-        # cm1.user_message(
-        #    rp.get_user_handover_orchestrator_prompt(),
-        #    name='System',
-        # )
+    with MultiroundContextManager(
+        injected_context=injected, tmp_from=cm0
+    ) as cm1:
+        cm1.pad_context_for('assistant')
         rp.llm.completion(
             GameRole.ORCHESTRATOR,
             rp.get_orchestrator_next_round_system_prompt(
@@ -600,8 +529,6 @@ Also decide on what characters enter/exit the scene.
             tool_choice='required',
         ).exhaust()
 
-    oc = nrc.outcome(chars | {narrator_char})
-    if oc is not None:
-        logger.debug(str(oc[0].name) + oc[1])
+    oc = nrc.outcome(here_chars | {narrator_char})
 
     return oc

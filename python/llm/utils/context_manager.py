@@ -1,12 +1,30 @@
 #!/usr/bin/env python3
+############################################################################
+#                                                                          #
+#  Copyright (C) 2025                                                      #
+#                                                                          #
+#  This program is free software: you can redistribute it and/or modify    #
+#  it under the terms of the GNU General Public License as published by    #
+#  the Free Software Foundation, either version 3 of the License, or       #
+#  (at your option) any later version.                                     #
+#                                                                          #
+#  This program is distributed in the hope that it will be useful,         #
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of          #
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the           #
+#  GNU General Public License for more details.                            #
+#                                                                          #
+#  You should have received a copy of the GNU General Public License       #
+#  along with this program. If not, see <http://www.gnu.org/licenses/>.    #
+#                                                                          #
+############################################################################
 import operator
-from functools import reduce, update_wrapper
-from pprint import pp
 import re
+from functools import reduce
+from pprint import pp
 from typing import (
-    Callable,
     ContextManager,
     Generic,
+    Literal,
     Self,
     TypeAlias,
     TypeVar,
@@ -18,11 +36,11 @@ from openai.types.chat import (
     ChatCompletionMessageToolCall,
     ChatCompletionMessageToolCallParam,
 )
-from openai.types.chat.chat_completion_message_tool_call_param import (
-    Function as Function0,
-)
 from openai.types.chat.chat_completion_message_tool_call import (
     Function as Function1,
+)
+from openai.types.chat.chat_completion_message_tool_call_param import (
+    Function as Function0,
 )
 from utils.logger import get_logger
 
@@ -31,32 +49,34 @@ logger = get_logger(__name__)
 T = TypeVar('T')
 
 Context: TypeAlias = list[ChatCompletionMessageParam]
-RegisterHookFnType: TypeAlias = Callable[[T, Context], None]
-
-
-class RegisterHook(Generic[T]):
-    def __init__(self, fn: RegisterHookFnType[T]) -> None:
-        self.hook = fn
-        update_wrapper(self, fn)
-
-    def __call__(self, entity: T, context: Context) -> None:
-        return self.hook(entity, context)
-
-
-@RegisterHook
-def no_register_hook(*_) -> None:
-    """Default no-op register hook."""
+"""
+Type alias for conversation context as a list of chat completion messages.
+"""
 
 
 class MultiroundContextManager(ContextManager, Generic[T]):
-    default_user_name = 'User'
-    default_assistant_name = 'Unknown'
+    """
+    Context manager for multi-round conversations with multiple entities.
+
+    Manages conversation state including:
+    - Injected base context.
+    - Active conversation history.
+    - Entity presence tracking.
+    - Message sequencing constraints.
+
+    :param entities: Initial entities in the conversation.
+    :param injected_context: Pre-existing context to prepend to all
+    conversations.
+    :param tmp_from: Base context manager to clone for temporary contexts.
+    """
+
+    default_sysname = 'System'
+    """Default name for system messages."""
 
     def __init__(
         self,
         *entities: T,
         injected_context: Context | None = None,
-        register_hook: RegisterHook[T] = no_register_hook,
         tmp_from: Self | None = None,
     ) -> None:
         self.base = tmp_from is None
@@ -70,8 +90,6 @@ class MultiroundContextManager(ContextManager, Generic[T]):
             }
 
             self.present_entities: set[T] = set()
-            # Called on exit.
-            self.register_hook: RegisterHook[T] = register_hook
         else:
             assert tmp_from is not None
             # Create a temporary context.
@@ -86,16 +104,33 @@ class MultiroundContextManager(ContextManager, Generic[T]):
             self.seen_entities: dict[T, list[slice]] = (
                 tmp_from.seen_entities.copy()
             )
-            # No register hook for temporary context.
-            self.register_hook: RegisterHook[T] = no_register_hook
 
     def context_of(self, entity: T) -> Context:
-        return reduce(
-            operator.add,
-            (self.context[sl] for sl in self.seen_entities[entity]),
-        )
+        """
+        Get the conversation context visible to a specific entity.
+
+        :param entity: The target entity.
+        :return: Conversation context visible to the entity.
+        :raises RuntimeError: If entity is not being tracked.
+        """
+        try:
+            return reduce(
+                operator.add,
+                (self.context[sl] for sl in self.seen_entities[entity]),
+            )
+        except KeyError as e:
+            raise RuntimeError(
+                f'{entity} not in {set(self.seen_entities.keys())}'
+            ) from e
 
     def filter_to(self, entity: T, confirm_destructive: bool = False) -> None:
+        """
+        Filter the current context to an entity's view.
+
+        :param entity: Entity whose view to adopt.
+        :param confirm_destructive: Must be True for base context operations.
+        :raises RuntimeError: For destructive operations without confirmation.
+        """
         if not confirm_destructive:
             if self.base:
                 raise RuntimeError(
@@ -107,17 +142,21 @@ class MultiroundContextManager(ContextManager, Generic[T]):
 
     @override
     def __enter__(self) -> Self:
+        """Enter the runtime context."""
         return self
 
     @override
     def __exit__(self, *_) -> None:
-        for entity, slices in self.seen_entities.items():
-            self.register_hook(
-                entity,
-                reduce(operator.add, (self.context[sl] for sl in slices)),
-            )
+        """Exit the runtime context."""
+        # Simpler to leave the exit logic outside of the environment.
 
     def enter_entities(self, *entities: T) -> None:
+        """
+        Mark entities as entering the conversation.
+
+        :param entities: Entities entering the conversation.
+        :raises RuntimeError: If entity is not being tracked.
+        """
         for entity in entities:
             sl = slice(len(self.context), None)
 
@@ -126,7 +165,8 @@ class MultiroundContextManager(ContextManager, Generic[T]):
             else:
                 last_appearance = self.seen_entities[entity][-1]
                 if last_appearance.stop is None:
-                    continue  # TODO: Better prompt.
+                    logger.warning(f'{entity} is already present, ignoring.')
+                    continue  # TODO: Remove when `enum` enforced by API.
                     raise RuntimeError(
                         f'{entity} has already entered the scene.'
                     )
@@ -135,12 +175,19 @@ class MultiroundContextManager(ContextManager, Generic[T]):
         self.present_entities |= set(entities)
 
     def exit_entities(self, *entities: T) -> None:
+        """
+        Mark entities as exiting the conversation.
+
+        :param entities: Entities exiting the conversation.
+        :raises RuntimeError: If entity is not being tracked.
+        """
         for entity in entities:
             if entity not in self.seen_entities:
                 raise RuntimeError(f'{entity} is not in the scene.')
             last_appearance = self.seen_entities[entity][-1]
             if last_appearance.stop is not None:
-                continue  # TODO: Better prompt.
+                logger.warning(f'{entity} is already off-scene, ignoring.')
+                continue  # TODO: Remove when `enum` enforced by API.
                 raise RuntimeError(f'{entity} has already exited the scene.')
 
             sl = slice(last_appearance.start, len(self.context))
@@ -151,10 +198,19 @@ class MultiroundContextManager(ContextManager, Generic[T]):
 
     def user_message(
         self,
-        content: str,
-        name=default_user_name,
+        _content: str,
+        name=default_sysname,
         suppress_decorations: bool = False,
     ) -> Self:
+        """
+        Add a user message to the conversation.
+
+        :param _content: Message content.
+        :param name: Name of the user. Defaults to the system name.
+        :param suppress_decorations: Whether to skip automatic name decorations.
+        :return: Self for method chaining.
+        :raises RuntimeError: If message violates sequencing rules.
+        """
         if self.head is not None and self.head['role'] != 'assistant':
             pp(self.context)
             raise RuntimeError(
@@ -162,13 +218,13 @@ class MultiroundContextManager(ContextManager, Generic[T]):
             )
 
         if suppress_decorations:
-            _content = content
+            content = _content
         else:
-            _content = f'<{name}>: {content}'
+            content = f'<{name}>: ' + (_content or '...')
 
         self.head = {
             'role': 'user',
-            'content': _content,
+            'content': content,
             'name': name,
         }
 
@@ -177,6 +233,14 @@ class MultiroundContextManager(ContextManager, Generic[T]):
         return self
 
     def tool_message(self, content: str, tool_call_id: str) -> Self:
+        """
+        Add a tool result message to the conversation.
+
+        :param content: Tool execution result.
+        :param tool_call_id: ID of the tool call being responded to.
+        :return: Self for method chaining.
+        :raises RuntimeError: If message violates sequencing rules.
+        """
         if (
             self.head is None
             or self.head['role'] != 'assistant'
@@ -196,11 +260,22 @@ class MultiroundContextManager(ContextManager, Generic[T]):
 
     def assistant_message(
         self,
-        content: str,
+        _content: str,
         tool_calls: list[ChatCompletionMessageToolCall],
-        name: str = default_assistant_name,
+        name: str = default_sysname,
         suppress_decorations: bool = False,
     ) -> Self:
+        """
+        Add an assistant message to the conversation.
+
+        :param _content: Message content.
+        :param tool_calls: List of tool calls included in the message. Leave as
+        `[]` if none.
+        :param name: Name of the user. Defaults to the system name.
+        :param suppress_decorations: Whether to skip automatic name decorations.
+        :return: Self for method chaining.
+        :raises RuntimeError: If message violates sequencing rules.
+        """
         if self.head is None or self.head['role'] == 'assistant':
             pp(self.context)
             raise RuntimeError(
@@ -217,36 +292,43 @@ class MultiroundContextManager(ContextManager, Generic[T]):
             for tool in tool_calls
         ]
         if suppress_decorations:
-            _content = content
+            content = _content
         else:
-            _decoration = f'<{name}>:'
-            _content = (
-                f'{_decoration} {re.sub(rf"^({_decoration})*", "", content)}'
-            ).strip()  # Dedupe decorations.
-        if tc:
-            self.head = {
-                'role': 'assistant',
-                'content': f'<{name}>: {_content}',
-                'tool_calls': tc,
-                'name': name,
-            }
-        else:
-            self.head = {'role': 'assistant', 'content': _content}
+            decor = f'<{name}>:'
+            content = (
+                f'{decor} ' + (re.sub(rf'^({decor})*', '', _content) or '...')
+            ).strip()  # Attempt to dedupe decorations.
+
+        self.head = {
+            'role': 'assistant',
+            'content': content,
+            'tool_calls': tc,
+            'name': name,
+        }
+        # Discard `tool_calls` key if no tool calls.
+        if not tc:
+            self.head.pop('tool_calls')  # No `del` for `TypedDict`
 
         self.context.append(self.head)
 
         return self
 
     def concat_context(self, context: Context) -> Self:
+        """
+        Append an existing context to the current conversation.
+
+        :param context: Context to append.
+        :return: Self for method chaining.
+        """
         for line in context.copy():
-            content = line.setdefault('content', '')
+            content = line.get('content', '')
 
             assert isinstance(content, str)
 
             if line['role'] == 'user':
                 self.user_message(
                     content,
-                    name=line.setdefault('name', self.default_user_name),
+                    name=line.get('name', self.default_sysname),
                 )
             elif line['role'] == 'assistant':
                 # FIXME: Rewrite this or `self.assistant_message` to skip
@@ -260,19 +342,60 @@ class MultiroundContextManager(ContextManager, Generic[T]):
                         ),  # XXX: `Function` needs to be recast.
                         type=tool['type'],
                     )
-                    for tool in line.setdefault('tool_calls', [])
+                    for tool in line.get('tool_calls', [])
                 ]
                 self.assistant_message(
                     content,
                     tool_calls=tool_calls,
-                    name=line.setdefault('name', self.default_assistant_name),
+                    name=line.get('name', self.default_sysname),
                 )
             elif line['role'] == 'tool':
                 self.tool_message(content, tool_call_id=line['tool_call_id'])
 
         return self
 
-    def tolist(self, entity: T | None = None) -> Context:
+    def pad_context_for(
+        self,
+        who_is_next: Literal['user', 'assistant', 'scratch'],
+        *,
+        content: str = '',
+        padding_name: str = 'Padding',
+        base: bool = False,
+    ) -> None:
+        """
+        Add padding messages to satisfy conversation sequence rules.
+
+        :param who_is_next: Next expected message type.
+        :param content: Content for padding messages.
+        :param padding_name: Name to use for padding messages.
+        :param base: Must be `True` when modifying base context.
+        :raises RuntimeError: If padding violates context rules.
+        """
+        if self.base and not base:
+            raise RuntimeError(
+                'Cannot pad base context without setting '
+                '`allow_pad_base` to `True`.'
+            )
+        head = 'system' if self.head is None else self.head['role']
+        if who_is_next in ('user', 'scratch') and head == 'user':
+            self.assistant_message(
+                content,
+                tool_calls=[],
+                name=padding_name,
+                suppress_decorations=True,
+            )
+        elif who_is_next == 'assistant' and head != 'user':
+            self.user_message(
+                content, name=padding_name, suppress_decorations=True
+            )
+
+    def to_list(self, entity: T | None = None) -> Context:
+        """
+        Get full conversation context as a list.
+
+        :param entity: If provided, returns context visible to this entity.
+        :return: Complete conversation context.
+        """
         return self.injected_context + (
             self.context_of(entity) if entity else self.context
         )
