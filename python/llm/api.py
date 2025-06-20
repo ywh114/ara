@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from pprint import pp
 from typing import (
     Any,
     Callable,
@@ -125,6 +126,10 @@ class GameLLM(LLMWrapper[T]):
 
             if end:
                 return None
+
+            # Padding.
+            if cm.head is not None and cm.head['role'] == 'assistant':
+                cm.user_message('', name='System', suppress_decorations=True)
 
             cm.assistant_message(
                 args.text.content_with_reasoning,

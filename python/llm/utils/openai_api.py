@@ -14,7 +14,6 @@ from typing import (
     TypedDict,
     overload,
     override,
-    reveal_type,
 )
 
 from openai.types.shared_params.function_definition import FunctionDefinition
@@ -323,6 +322,8 @@ class LLMWrapper(
         # Concat `specific_tools`.
         if completion_kwargs['tools']:
             completion_kwargs['tools'] += specific_tools or []
+        else:
+            completion_kwargs['tools'] = specific_tools or NotGiven()
 
         logger.debug(
             f'Sent request to {profile.client.base_url} {profile.model}.'
@@ -343,6 +344,7 @@ class LLMWrapper(
             if not specific_tool_hook
             else profile.tool_hook | specific_tool_hook
         )
+
         rfn = profile.reasoning_field_name
         if not stream:
             assert isinstance(response, ChatCompletion)

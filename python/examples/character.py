@@ -1,26 +1,50 @@
 #!/usr/bin/env python3
-import random
-import uuid
-
-from examples.card import cardh
+from examples.card import cardh0, cardh1, cardh2, cardh3
 from examples.database import db
 from examples.importance import CharacterImportance
 from utils.bars import BarManager
+from utils.logger import get_logger
+from utils.uuid4_from_seed import uuid4_from_seed
 from world.character.character_class import Character
 from world.character.memory import Memory
 
+logger = get_logger(__name__)
 
-def uuid4_from_seed(seed: int) -> uuid.UUID:
-    random.seed(seed)
-    random_bytes = bytes([random.getrandbits(8) for _ in range(16)])
-    return uuid.UUID(bytes=random_bytes, version=4)
+seed0 = 114514
+seed1 = 191981
+seed2 = 666666
+seed3 = 999999
 
+char0 = Character(
+    char_id := uuid4_from_seed(seed0),
+    cardh0,
+    Memory(db, char_id),
+    BarManager(),
+    [],
+    CharacterImportance.REQUIRED,
+)
 
-seed = 114514
+char1 = Character(
+    char_id := uuid4_from_seed(seed1),
+    cardh1,
+    Memory(db, char_id),
+    BarManager(),
+    [],
+    CharacterImportance.REQUIRED,
+)
 
-char = Character(
-    char_id := uuid4_from_seed(seed),
-    cardh,
+player = Character(
+    char_id := uuid4_from_seed(seed2),
+    cardh2,
+    Memory(db, char_id),
+    BarManager(),
+    [],
+    CharacterImportance.EIGEN,
+)
+
+narrator = Character(
+    char_id := uuid4_from_seed(seed3),
+    cardh3,
     Memory(db, char_id),
     BarManager(),
     [],
@@ -28,4 +52,7 @@ char = Character(
 )
 
 if __name__ == '__main__':
-    print(char.id)
+    logger.info(char0)
+    logger.info(char1)
+    logger.info(player)
+    logger.info(narrator)

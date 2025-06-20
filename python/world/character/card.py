@@ -1,35 +1,26 @@
 #!/usr/bin/env python3
 from dataclasses import dataclass
-from enum import StrEnum, auto
 from pathlib import Path
 from typing import Any, Literal, Self, TypeAlias
 from uuid import UUID
 
 import aichar
+from configuration.config import ConfigHolder
 from utils.logger import get_logger
+from utils.uuid4_from_seed import uuid4_from_seed
 
 logger = get_logger(__name__)
 
 
-class CardFormat(StrEnum):
-    """
-    Supported character card export formats.
+CardFormat: TypeAlias = (
+    Literal['tavernai']
+    | Literal['sillytavern']
+    | Literal['textgenerationwebui']
+    | Literal['pygmalion']
+    | Literal['aicompanion']
+)
 
-    :cvar tavernai: TavernAI character card format
-    :cvar sillytavern: SillyTavern character card format (default)
-    :cvar textgenerationwebui: Text Generation WebUI character card format
-    :cvar pygmalion: Pygmalion character card format
-    :cvar aicompanion: AI Companion character card format
-    :cvar default: Alias for the default format (sillytavern)
-    """
-
-    TAVERNAI = auto()
-    SILLYTAVERN = auto()
-    TEXTGENERATIONWEBUI = auto()
-    PYGMALION = auto()
-    AICOMPANION = auto()
-
-    DEFAULT = SILLYTAVERN
+default_format: CardFormat = 'sillytavern'
 
 
 CardField: TypeAlias = (
@@ -47,24 +38,25 @@ class CardHolder:
     """
     Holds character card data with conversion and manipulation capabilities.
 
-    :param id: Unique AraId identifier for the card
-    :param path: Filesystem path to the card image
-    :param cc: Loaded :class:`aichar.CharacterClass` instance
-    :param export_format: Export format (default: :attr:`CardFormat.sillytavern`)
+    :param id: Unique UUID identifier for the card.
+    :param path: Filesystem path to the card image.
+    :param cc: Loaded :class:`aichar.CharacterClass` instance.
+    :param export_format: Export format (default: :attr:`CardFormat.sillytavern`).
 
-    :raises ValueError: If path doesn't match CharacterClass's image_path
+    :raises ValueError: If path doesn't match CharacterClass's image_path.
     """
 
     id: UUID
     path: Path
     cc: Any  # `CharacterClass` is not exposed by the library.
-    export_format: CardFormat = CardFormat.DEFAULT
+    export_format: CardFormat = default_format
 
     def __post_init__(self) -> None:
         """
         Validate path consistency after initialization.
 
-        :raises ValueError: When path doesn't match CharacterClass's image_path
+        :raises ValueError: When path doesn't match CharacterClass's
+            `image_path`.
         """
         if not self.cc.image_path != self.path:
             raise ValueError(
@@ -78,13 +70,13 @@ class CardHolder:
         _id: UUID,
         path: Path,
         init_path: Path | None = None,
-        export_format: CardFormat = CardFormat.DEFAULT,
+        export_format: CardFormat = default_format,
     ) -> Self:
         """
         Load character card from PNG with optional format conversion.
 
         :param card_id: The unique identifier for the card.
-        :type card_id: AraId
+        :type card_id: The UUID.
         :param path: Target path for the card file.
         :type path: Path
         :param init_path: Source path for conversion (uses direct load if None).
@@ -135,9 +127,7 @@ class CardHolder:
         Update character card field value.
 
         :param field: Field to modify.
-        :type field: CardField
         :param value: New field value.
-        :type value: str
         """
         setattr(self.cc, field, value)
 
@@ -146,11 +136,20 @@ class CardHolder:
         Retrieve character card field value.
 
         :param field: Field to access.
-        :type field: CardField
         :return: Current field value.
-        :rtype: str
         """
         return getattr(self.cc, field)
 
     def __repr__(self) -> str:
         return self.cc.data_summary
+
+
+def standard_load(
+    file: Path, assets_dir: Path, confh: ConfigHolder
+) -> CardHolder:
+    # TODO: Put assets_dir into confh.insts
+    return CardHolder.load_png(
+        uuid4_from_seed(file),
+        path=confh.insts.cache_assets_dir.joinpath(file),
+        init_path=assets_dir.joinpath(file),
+    )

@@ -54,9 +54,7 @@ recall_from_conversations = GameLLM.create_tool(
         'query': {
             'type': 'array',
             'items': {'type': 'string'},
-            'description': 'List of query texts.'
-            'similarity search texts.\n'
-            'i.e. "query1:query2:..."',
+            'description': 'List of query/search texts.\n',
         },
         'strength': {
             'type': 'string',
@@ -102,8 +100,9 @@ class Memory(Generic[T]):
             hook=self.recall_from_conversations_hook,
         )
         self.chat_tools_end = ToolsHookPair(
-            tools=[write_scratch],
-            hook=self.write_scratch_hook_end,
+            tools=[recall_from_conversations, write_scratch],
+            hook=self.recall_from_conversations_hook
+            | self.write_scratch_hook_end,
         )
 
     def prepare_scratch_for_new_conversation(self) -> None:
@@ -143,7 +142,7 @@ class Memory(Generic[T]):
         "Admit you don't know, or make something up depending on the "
         'situation. You probably want to do the prior.'
 
-        print(tool_args)
+        # print(tool_args)  # FIXME: Remove
         args_dict = json.loads(tool_args)
         queries: list[str] = args_dict['query']
         strength = args_dict['strength']

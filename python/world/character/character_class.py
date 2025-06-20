@@ -117,8 +117,7 @@ class Character:
             },
             {
                 'role': 'assistant',
-                'content': assistant_content
-                + '\nI will never show this to others, or mention that this exists.',
+                'content': assistant_content,
                 'name': self.cardh.get_field('name'),
             },
         ]

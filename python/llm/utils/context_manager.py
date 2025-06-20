@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import operator
 from functools import reduce, update_wrapper
+from pprint import pp
 import re
 from typing import (
     Callable,
@@ -10,7 +11,6 @@ from typing import (
     TypeAlias,
     TypeVar,
     override,
-    reveal_type,
 )
 
 from openai.types.chat import (
@@ -65,17 +65,19 @@ class MultiroundContextManager(ContextManager, Generic[T]):
             self.injected_context: Context = injected_context or []
             self.context: Context = []
             self.head: ChatCompletionMessageParam | None = None
-            self.seen_entities: dict[T, list[slice]] = {}
+            self.seen_entities: dict[T, list[slice]] = {
+                entity: [slice(0, None)] for entity in entities
+            }
+
             self.present_entities: set[T] = set()
             # Called on exit.
             self.register_hook: RegisterHook[T] = register_hook
-
-            # Add entities.
-            self.enter_entities(*entities)
         else:
             assert tmp_from is not None
             # Create a temporary context.
-            self.injected_context: Context = tmp_from.injected_context.copy()
+            self.injected_context: Context = (
+                injected_context or tmp_from.injected_context.copy()
+            )
             self.context: Context = tmp_from.context.copy()
             self.head: ChatCompletionMessageParam | None = (
                 tmp_from.head.copy() if tmp_from.head else None
@@ -101,7 +103,7 @@ class MultiroundContextManager(ContextManager, Generic[T]):
                     'unless `confirm_destructive` is `True`.'
                 )
         self.context = self.context_of(entity)
-        self.head = self.context[-1]
+        self.head = self.context[-1] if self.context else None
 
     @override
     def __enter__(self) -> Self:
@@ -120,12 +122,15 @@ class MultiroundContextManager(ContextManager, Generic[T]):
             sl = slice(len(self.context), None)
 
             if entity not in self.seen_entities:
-                self.seen_entities[entity] = [sl]
-                return
-            last_appearance = self.seen_entities[entity][-1]
-            if last_appearance.stop is None:
-                raise RuntimeError(f'{entity} has already entered the scene.')
-            self.seen_entities[entity] += [sl]
+                raise RuntimeError(f'{entity} is not in the scene.')
+            else:
+                last_appearance = self.seen_entities[entity][-1]
+                if last_appearance.stop is None:
+                    continue  # TODO: Better prompt.
+                    raise RuntimeError(
+                        f'{entity} has already entered the scene.'
+                    )
+                self.seen_entities[entity] += [sl]
 
         self.present_entities |= set(entities)
 
@@ -135,6 +140,7 @@ class MultiroundContextManager(ContextManager, Generic[T]):
                 raise RuntimeError(f'{entity} is not in the scene.')
             last_appearance = self.seen_entities[entity][-1]
             if last_appearance.stop is not None:
+                continue  # TODO: Better prompt.
                 raise RuntimeError(f'{entity} has already exited the scene.')
 
             sl = slice(last_appearance.start, len(self.context))
@@ -143,15 +149,26 @@ class MultiroundContextManager(ContextManager, Generic[T]):
 
         self.present_entities -= set(entities)
 
-    def user_message(self, content: str, name=default_user_name) -> Self:
+    def user_message(
+        self,
+        content: str,
+        name=default_user_name,
+        suppress_decorations: bool = False,
+    ) -> Self:
         if self.head is not None and self.head['role'] != 'assistant':
+            pp(self.context)
             raise RuntimeError(
                 'User message must come after system or assistant message.'
             )
 
+        if suppress_decorations:
+            _content = content
+        else:
+            _content = f'<{name}>: {content}'
+
         self.head = {
             'role': 'user',
-            'content': f'<{name}>: {content}',
+            'content': _content,
             'name': name,
         }
 
@@ -165,6 +182,7 @@ class MultiroundContextManager(ContextManager, Generic[T]):
             or self.head['role'] != 'assistant'
             or ('tool_calls' in self.head and not self.head['tool_calls'])
         ):
+            pp(self.context)
             raise RuntimeError('Tool call must come after assistant tool call.')
         self.head = {
             'role': 'tool',
@@ -184,6 +202,7 @@ class MultiroundContextManager(ContextManager, Generic[T]):
         suppress_decorations: bool = False,
     ) -> Self:
         if self.head is None or self.head['role'] == 'assistant':
+            pp(self.context)
             raise RuntimeError(
                 'Assistant message must come after user message or tool call.'
             )
@@ -203,7 +222,7 @@ class MultiroundContextManager(ContextManager, Generic[T]):
             _decoration = f'<{name}>:'
             _content = (
                 f'{_decoration} {re.sub(rf"^({_decoration})*", "", content)}'
-            ).strip()  # In case LLM copies extra decorations.
+            ).strip()  # Dedupe decorations.
         if tc:
             self.head = {
                 'role': 'assistant',
